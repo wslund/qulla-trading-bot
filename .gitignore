@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtuell miljö och verktygscache
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Hemligheter (mall finns i .env.example)
+.env
+
+# Data: allt under data/ ignoreras utom README och .gitkeep
+data/**
+!data/**/
+!data/README.md
+!data/**/.gitkeep
+
+# Modellvikter och andra stora artefakter
+models/
+*.pt
+*.pth
+*.pkl
+*.joblib
+
+# OS och editorer
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
