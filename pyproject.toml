@@ -4,14 +4,22 @@ dynamic = ["version"]
 description = "Automatiserad tradingbot baserad på Qullamaggies breakout-strategi"
 readme = "README.md"
 requires-python = ">=3.12"
-# Körtidsberoenden läggs till när de används (t.ex. pandas och pyarrow i fas 4).
-dependencies = []
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+]
+
+[project.optional-dependencies]
+# Nätverksadaptrar; krävs inte för tester.
+yahoo = ["yfinance>=0.2.50"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
     "ruff>=0.8",
 ]
+
 
 [build-system]
 requires = ["hatchling"]

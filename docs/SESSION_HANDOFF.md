@@ -1,21 +1,21 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-25 (Claude, fas 2, fjärde sessionen). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-10-25 (Claude, datapilot, session 1). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Fas 2 nästan klar. `STRATEGY_SPEC.md` v0.2.1 och `RISK_MODEL.md` v0.1 mergade (PR #3). **`RISK_MODEL.md` v0.2 ligger på grenen `docs/risk-model-v02`** med sex korrigeringar efter ChatGPT:s granskning (se versionshistoriken). Ej mergad.
+Fas 2 klar: `STRATEGY_SPEC.md` v0.2.1 och `RISK_MODEL.md` v0.2 mergade (PR #4). **Datapilot påbörjad på grenen `feat/data-pilot-yahoo`**: providergränssnitt, Yahoo-adapter med as-traded-rekonstruktion, kvalitetskontroller, Parquet-lagring med metadata, jämförelsefunktion, CLI-skript, 24 offline-tester, `docs/DATA_PILOT.md`. Ej mergad. Claudes miljö saknar nätverk till Yahoo/Stooq – verkliga hämtningar körs av projektägaren.
 
 ## Senaste beslut
 D-008 startkapital 10 000 SEK (testa även 50 000 / 200 000). D-009 riskmodellens struktur; inga parametervärden låsta.
 
 ## Pågående uppgift
-Granskning och merge av `RISK_MODEL.md` v0.2. Fokus: §2.1.7 (reduktion efter fyllning – är toleransen 25 % rimlig?), §2.6 (HALT avslutar simuleringsfönstret), §2.8 (skatteformeln ska verifieras mot Skatteverket).
+Granskning av PR `feat/data-pilot-yahoo`. Därefter kör projektägaren `DATA_PILOT.md` §8 lokalt (verify_split, ingest, avnoterad ticker) och rapporterar utfall.
 
 ## Nästa steg
-1. Projektägaren granskar och mergar v0.2 eller begär ändringar. Därefter är fas 2 klar.
-2. Fas 1 (ChatGPT): Q-001–Q-003 samt nya Q-007 (fraktionshandel på ISK) och Q-008 (USD-saldo på ISK). Svar som förslag till D-010+.
-3. Beslut om spec §12-nivåer före fas 6.
-4. Fas 3: dataset V0.2 enligt D-006. Fas 4 (datalager) när Q-002 är avgjord; datalagret ska även rymma rapportdatum och sektor (RISK_MODEL §2.2, §2.7).
+1. Merge av datapiloten efter granskning; lokala körningar enligt `DATA_PILOT.md` §8.
+2. Stooq-adapter (ingen nyckel) → riktigt jämförelsetest. Sedan Alpaca (nyckel via `.env`).
+3. Fas 1 (ChatGPT): Q-001–Q-003, Q-007, Q-008.
+4. Beslut om spec §12-nivåer före fas 6. Fas 3: dataset V0.2 enligt D-006.
 
 ## Öppna frågor
 Q-001–Q-008 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmatris i `RISK_MODEL.md` §3.
@@ -24,4 +24,4 @@ Q-001–Q-008 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmat
 - Alltid: denna fil.
 - Riskgranskning: `RISK_MODEL.md`.
 - Fas 1: `DECISIONS.md`.
-- Fas 4-start: `PROJECT_MASTER.md` §3–4, `STRATEGY_SPEC.md` §1–3, `RISK_MODEL.md` §2.2.
+- Datapilot: `DATA_PILOT.md` och utdata från lokala körningar.
