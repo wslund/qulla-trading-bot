@@ -11,6 +11,7 @@ from tradingbot.data.store import ParquetStore
 
 PROVIDERS: dict[str, str] = {
     "yahoo": "tradingbot.data.providers.yahoo:YahooProvider",
+    "stooq": "tradingbot.data.providers.stooq:StooqProvider",
 }
 
 

@@ -1,8 +1,9 @@
 """Data quality checks on a normalized daily-bar frame.
 
 Status semantics: FAIL = data must not be used (structural errors); WARN = usable but
-flagged (gaps, suspicious jumps); OK = no findings. No exchange holiday calendar is used
-in the pilot, so gaps are judged on weekdays only and reported, not failed.
+flagged (gaps, suspicious jumps); OK = no findings. Trading days are checked against an
+exchange calendar (default XNYS via exchange_calendars); pass ``calendar=None`` to fall
+back to a weekday-only check.
 """
 
 from __future__ import annotations
@@ -15,6 +16,17 @@ import pandas as pd
 from tradingbot.data.schema import PRICE_COLUMNS, validate_columns
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
+_CALENDARS: dict[str, object] = {}
+
+
+def trading_sessions(calendar: str, start, end) -> pd.DatetimeIndex:
+    """Exchange sessions in [start, end] (cached calendar objects, loaded from 1990)."""
+    import exchange_calendars as xc
+
+    if calendar not in _CALENDARS:
+        _CALENDARS[calendar] = xc.get_calendar(calendar, start="1990-01-01")
+    cal = _CALENDARS[calendar]
+    return cal.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
 
 
 @dataclass
@@ -31,11 +43,12 @@ class QualityReport:
 def check_quality(
     df: pd.DataFrame,
     *,
+    calendar: str | None = "XNYS",
     max_weekday_gap: int = 4,
     jump_tolerance: float = 0.4,
     split_tolerance: float = 0.2,
 ) -> QualityReport:
-    """Run all checks. ``max_weekday_gap`` = consecutive missing weekdays before WARN."""
+    """Run all checks. ``max_weekday_gap`` applies only to the weekday fallback."""
     rep = QualityReport()
     problems = validate_columns(df)
     for p in problems:
@@ -47,7 +60,10 @@ def check_quality(
 
     _check_structure(df, rep)
     _check_ohlc(df, rep)
-    _check_calendar(df, rep, max_weekday_gap)
+    if calendar:
+        _check_exchange_calendar(df, rep, calendar)
+    else:
+        _check_weekdays(df, rep, max_weekday_gap)
     _check_splits(df, rep, jump_tolerance, split_tolerance)
     return rep
 
@@ -85,7 +101,26 @@ def _check_ohlc(df: pd.DataFrame, rep: QualityReport) -> None:
         rep.add(WARN, f"{zerovol} rows with zero volume")
 
 
-def _check_calendar(df: pd.DataFrame, rep: QualityReport, max_weekday_gap: int) -> None:
+def _check_exchange_calendar(df: pd.DataFrame, rep: QualityReport, calendar: str) -> None:
+    dates = pd.DatetimeIndex(pd.to_datetime(df["date"]))
+    sessions = trading_sessions(calendar, dates.min(), dates.max())
+    non_sessions = dates.difference(sessions)
+    if len(non_sessions):
+        rep.add(
+            FAIL,
+            f"{len(non_sessions)} rows on non-trading days ({calendar}): "
+            f"{[d.date().isoformat() for d in non_sessions[:5]]}",
+        )
+    missing = sessions.difference(dates)
+    if len(missing):
+        rep.add(
+            WARN,
+            f"{len(missing)} {calendar} sessions without data: "
+            f"{[d.date().isoformat() for d in missing[:5]]}",
+        )
+
+
+def _check_weekdays(df: pd.DataFrame, rep: QualityReport, max_weekday_gap: int) -> None:
     dates = pd.to_datetime(df["date"])
     weekend = (dates.dt.day_of_week >= 5).sum()
     if weekend:
