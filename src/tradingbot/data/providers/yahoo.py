@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from tradingbot.data.providers.base import MarketDataProvider, RawBars
-from tradingbot.data.schema import NORMALIZED_COLUMNS
+from tradingbot.data.schema import AS_TRADED, NORMALIZED_COLUMNS
 
 RAW_COLUMNS = ["Open", "High", "Low", "Close", "Adj Close", "Volume", "Dividends", "Stock Splits"]
 
@@ -77,6 +77,7 @@ class YahooProvider(MarketDataProvider):
                 "split_ratio": split_ratio.to_numpy(float),
                 "dividend": df["Dividends"].to_numpy(float),
                 "source": self.name,
+                "price_basis": AS_TRADED,
             }
         )
         return out[NORMALIZED_COLUMNS]

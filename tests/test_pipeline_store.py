@@ -65,3 +65,35 @@ def test_compare_identical_and_perturbed(normalized: pd.DataFrame) -> None:
     assert rep.close_days_over_tol == 1
     assert rep.dates_over_tol == ["2024-03-06"]
     assert 0.019 < rep.close_max_rel_diff < 0.021
+
+
+def test_quality_report_from_meta(tmp_path: Path, yahoo_raw: RawBars) -> None:
+    from tradingbot.data.report import quality_rows, render_markdown
+
+    store = ParquetStore(tmp_path)
+    process(YahooProvider(), yahoo_raw, store, date(2024, 3, 1), date(2024, 3, 31))
+    process(
+        YahooProvider(),
+        RawBars("yahoo", "GONE", pd.DataFrame(), "fixture"),
+        store,
+        date(2024, 3, 1),
+        date(2024, 3, 31),
+    )
+    rows = quality_rows(store, "yahoo")
+    assert [r["ticker"] for r in rows] == ["GONE", "SYN"]
+    assert {r["status"] for r in rows} == {"FAIL", "OK"}
+    md = render_markdown(store)
+    assert "## yahoo (FAIL=1, OK=1)" in md
+    assert "| SYN | 12 | 2024-03-04 | 2024-03-19 | OK | - |" in md
+    assert store.list_sources() == ["yahoo"]
+
+
+def test_schema_v1_file_is_rejected(tmp_path: Path, normalized: pd.DataFrame) -> None:
+    store = ParquetStore(tmp_path)
+    p = store.processed_path("yahoo", "OLD")
+    p.parent.mkdir(parents=True)
+    normalized.drop(columns=["price_basis"]).to_parquet(p, index=False)
+    import pytest
+
+    with pytest.raises(ValueError, match="re-run ingest"):
+        store.read_processed("yahoo", "OLD")

@@ -7,11 +7,17 @@ from datetime import date, datetime
 
 import pandas as pd
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
-# Column order of a normalized daily-bar frame. Prices in open/high/low/close are
-# as traded (not adjusted); adj_close is split- and dividend-adjusted by the source;
-# adj_factor = adj_close / close lets any column be adjusted on demand.
+# What open/high/low/close/volume represent. Never compare frames with different bases.
+AS_TRADED = "as_traded"  # prices and volume as they were on the day
+SPLIT_ADJUSTED = "split_adjusted"  # backward split-adjusted, not dividend-adjusted
+TOTAL_RETURN = "total_return"  # split- and dividend-adjusted
+PRICE_BASES = (AS_TRADED, SPLIT_ADJUSTED, TOTAL_RETURN)
+
+# Column order of a normalized daily-bar frame. price_basis says what open/high/low/close/
+# volume represent (as_traded when the source allows it). adj_close is the source's
+# split- and dividend-adjusted close; adj_factor = adj_close / close.
 NORMALIZED_COLUMNS: list[str] = [
     "date",
     "ticker",
@@ -25,6 +31,7 @@ NORMALIZED_COLUMNS: list[str] = [
     "split_ratio",
     "dividend",
     "source",
+    "price_basis",
 ]
 
 PRICE_COLUMNS = ["open", "high", "low", "close"]

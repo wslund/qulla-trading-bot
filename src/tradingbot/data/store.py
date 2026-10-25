@@ -48,7 +48,20 @@ class ParquetStore:
         return p
 
     def read_processed(self, source: str, ticker: str) -> pd.DataFrame:
-        return pd.read_parquet(self.processed_path(source, ticker))
+        df = pd.read_parquet(self.processed_path(source, ticker))
+        if "price_basis" not in df.columns:
+            raise ValueError(
+                f"{source}/{ticker}: stored with schema v1 (no price_basis); re-run ingest"
+            )
+        return df
+
+    def list_tickers(self, source: str) -> list[str]:
+        d = self.root / "processed" / "daily" / source
+        return sorted(p.stem for p in d.glob("*.parquet")) if d.exists() else []
+
+    def list_sources(self) -> list[str]:
+        d = self.root / "processed" / "daily"
+        return sorted(p.name for p in d.iterdir() if p.is_dir()) if d.exists() else []
 
     def read_meta(self, source: str, ticker: str) -> dict:
         return json.loads(self.meta_path(source, ticker).read_text(encoding="utf-8"))
