@@ -1,26 +1,27 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-12 (Claude, fas 0). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-10-25 (Claude, fas 2). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Fas 0 klar. Projektskelett skapat: struktur, `pyproject.toml` (uv, Ruff, pytest), `uv.lock`, CI-workflow och fyra dokument. Ruff och pytest passerar. Ingen tradinglogik, ingen ML, ingen mäklarkod.
+Fas 0 klar (repo publikt, CI grön). Fas 2 påbörjad: `STRATEGY_SPEC.md` v0.1 finns som **utkast på grenen `docs/strategy-spec-v01`**, ej granskad, ej mergad.
 
 ## Senaste beslut
-D-001–D-007 i `DECISIONS.md`: struktur, verktygskedja, dokumentsystem, utvecklingsordning, entry-modeller på dagsdata, hantering av dataset V0.2, mäklarläge.
+D-001–D-007. Inga nya beslut i denna session; v0.1 föreslår men låser inget.
 
 ## Pågående uppgift
-Ingen. Projektägaren ska pusha repot till GitHub och kontrollera att CI blir grön.
+Granskning av `STRATEGY_SPEC.md` v0.1 (PR från `docs/strategy-spec-v01`). Granskare: ChatGPT. Fokus: (a) stämmer `[Q]`-citaten mot primärkällan, (b) är `[T]`-mekaniseringarna i §3 och §6 rimliga, (c) är acceptansnivåerna i §12 vettiga innan de blir beslut.
 
 ## Nästa steg
-1. Projektägaren: skapa privat repo, pusha, verifiera grön CI.
-2. ChatGPT (fas 1, kan löpa parallellt): Q-001 IBKR API på ISK, Q-002 dataleverantör, Q-003 kostnadsmodell. Leverera som förslag till nya beslut (D-008 och framåt) med källor.
-3. Claude (fas 2): utkast till `STRATEGY_SPEC.md` v0.1. Kräver svar på Q-005 (kapital, risk per affär) och preliminärt universum (Q-004). ChatGPT granskar utkastet.
-4. Fas 3: överlämning och granskning av dataset V0.2 enligt D-006.
+1. ChatGPT granskar PR:en; projektägaren mergar efter åtgärdade kommentarer.
+2. Projektägaren besvarar Q-005 (kapital, risk per affär) → P-005 låses.
+3. Beslut om §12-nivåer → nytt D-nummer. Måste ske före fas 6.
+4. Fas 1 (parallellt, ChatGPT): Q-001–Q-003.
+5. Fas 3: dataset V0.2 enligt D-006.
 
 ## Öppna frågor
-Q-001–Q-006 i `DECISIONS.md`.
+Q-001–Q-006 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13.
 
 ## Filer att bifoga i nästa chatt
 - Alltid: denna fil.
-- Fas 1 (ChatGPT): `DECISIONS.md`.
-- Fas 2 (Claude): `STRATEGY_SPEC.md` samt `PROJECT_MASTER.md` §2 och §6.
+- Granskning av specen: `STRATEGY_SPEC.md`.
+- Fas 1: `DECISIONS.md`.
