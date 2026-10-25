@@ -3,17 +3,23 @@
 Automatiserad tradingbot baserad på Kristjan Kullamägis (Qullamaggie) breakout-strategi.
 Målet är långsiktigt positiv nettoavkastning efter alla kostnader, med strikt money management.
 
-**Status:** Fas 0 – projektskelett. Ingen tradinglogik, ML eller mäklarkod finns ännu.
+**Status:** Fas 2 klar (strategispec och riskmodell). Datapilot pågår (`docs/DATA_PILOT.md`). Ingen tradinglogik, ML eller mäklarkod finns ännu.
 
 ## Komma igång lokalt
 
 Kräver [uv](https://docs.astral.sh/uv/) och git. Python 3.12 laddas ner automatiskt av uv om den saknas.
 
 ```bash
-uv sync                      # skapar .venv och installerar beroenden (inkl. dev)
+uv sync --all-extras         # skapar .venv och installerar beroenden (inkl. dev och yfinance)
 uv run pytest                # kör tester
 uv run ruff check .          # lint
 uv run ruff format --check . # formateringskontroll (uv run ruff format . rättar)
+```
+
+Datahämtning (kräver nätverk, se `docs/DATA_PILOT.md`):
+
+```bash
+uv run python scripts/ingest.py --source yahoo --tickers AAPL MSFT --start 2015-01-01
 ```
 
 Samma tre kontroller körs i CI (`.github/workflows/ci.yml`) vid push till `main` och vid pull requests.
@@ -32,6 +38,7 @@ qulla-trading-bot/
 │   ├── SESSION_HANDOFF.md    # aktuell status och nästa steg; startar varje ny AI-chatt
 │   ├── STRATEGY_SPEC.md      # mekanisk strategispecifikation, versionerad
 │   ├── RISK_MODEL.md         # money management: principer, regler, testparametrar
+│   ├── DATA_PILOT.md         # datapilot: arkitektur, justering, kvalitet, begränsningar
 │   └── DECISIONS.md          # beslutslogg och öppna frågor
 ├── src/tradingbot/
 │   ├── data/                 # hämtning, Parquet, point-in-time, kvalitet

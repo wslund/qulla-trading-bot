@@ -19,7 +19,7 @@ jobs:
           enable-cache: true
 
       - name: Installera Python och beroenden (enligt uv.lock)
-        run: uv sync --locked
+        run: uv sync --locked --all-extras
 
       - name: Ruff lint
         run: uv run ruff check .
