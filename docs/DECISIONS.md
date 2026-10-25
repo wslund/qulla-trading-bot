@@ -4,12 +4,14 @@ Append-only. Nya beslut läggs sist med nästa nummer och datum. Öppna frågor 
 
 ## Öppna frågor
 
-- **Q-001** Stöder Interactive Brokers API automatiserad orderläggning på svenskt ISK (lanserat 2025-09-30)? Vilka ordertyper, marknader och datafeeds? Finns andra svenska ISK-aktörer med officiellt API? Nordnet tar inte emot nya API-kunder. Verifieras mot officiell dokumentation. Fas 1.
-- **Q-002** Dataleverantör: dagsdata OHLCV för valt universum inklusive avnoterade bolag, splitjustering, kostnad, licens och möjlighet till intradagsdata senare. Exempel att utvärdera: Norgate Data, EODHD, Polygon. Fas 1.
-- **Q-003** Kostnadsmodell för vald mäklare: courtage, valutaväxling, antaganden om spread och slippage. Fas 1.
+- **Q-001** Stöder Interactive Brokers API automatiserad orderläggning på svenskt ISK (lanserat 2025-09-30)? Vilka ordertyper, marknader och datafeeds? Finns andra svenska ISK-aktörer med officiellt API? Nordnet tar inte emot nya API-kunder. Verifieras mot officiell dokumentation. Fas 1. Tillägg 2026-10-25: se även Q-007 och Q-008.
+- **Q-002** Dataleverantör: dagsdata OHLCV för valt universum inklusive avnoterade bolag, splitjustering, kostnad, licens och möjlighet till intradagsdata senare. Exempel att utvärdera: Norgate Data, EODHD, Polygon. Tillägg 2026-10-25: även rapportdatum (för blackout-variant) och sektorklassificering (för korrelationsgräns), se RISK_MODEL §2. Fas 1.
+- **Q-003** Kostnadsmodell för vald mäklare: courtage, valutaväxling, antaganden om spread och slippage. Fas 1. Delvis verifierat 2026-10-25: IBKR ordinarie prislista för US-aktier anger minimum 0,35 USD/order (Tiered) och 1 USD/order (Fixed). Kontospecifika villkor, växling och övriga avgifter återstår.
 - **Q-004** Universum. Preliminärt USA `[H]`; bekräftas när Q-001–Q-003 är avgjorda. Fas 1–2.
-- **Q-005** Startkapital och riskparametrar (max risk per affär, max exponering, förlustgränser). Behövs för spec och backtest. Avgörs av projektägaren. Fas 2.
+- **Q-005** Riskparametrar (risk per affär, exponering, förlustgränser). Startkapitalet avgjort i D-008; parametrarna är testvariabler enligt `RISK_MODEL.md` §3 och låses först efter backtest. Fas 2–6.
 - **Q-006** Etikettkälla för Modell A: regelbaserade etiketter, manuell märkning eller kombination. Avgörs före ML-fasen.
+- **Q-007** Stöder IBKR fraktionshandel i US-aktier på svenskt ISK? Antas **inte** förrän verifierat; positionsstorlek avrundas till hela aktier. Fas 1.
+- **Q-008** Kan USD-saldo hållas på svenskt ISK hos IBKR, eller tvingas växling per affär? Antas **inte** förrän verifierat. Avgör hur FX-kostnad modelleras. Fas 1.
 
 ## Beslut
 
@@ -35,3 +37,9 @@ Checklista: datakällor och licenser; universum och avnoterade bolag; point-in-t
 
 ### D-007 (2026-10-12) Mäklare
 Interactive Brokers är huvudkandidat efter ISK-lanseringen 2025-09-30. Nordnet utgår tills vidare (inga nya API-kunder). Mäklarbeslut tas när Q-001 är verifierad. Ingen livehandel utan uttryckligt beslut; paper trading först.
+
+### D-008 (2026-10-25) Simulerat startkapital
+Startkapital för simulering är 10 000 SEK. Backtester körs även vid 50 000 och 200 000 SEK för att skilja kapitalets betydelse (fasta avgifter, hela aktier) från strategins edge. Beslut av projektägaren. Riskparametrarna låses inte i detta beslut; de testas enligt `RISK_MODEL.md` §3.
+
+### D-009 (2026-10-25) Riskmodellens struktur
+`docs/RISK_MODEL.md` är normativ källa för money management och delas i Qullamaggies dokumenterade principer, våra kompletterande regler, testbara parametrar och frågor som blockerar livehandel. Riskmotorn byggs som rena funktioner oberoende av ML. Inga parametervärden i dokumentet är beslutade; `risk_per_trade` testas som 0,5 % och 1 %, `max_cost_to_risk` som 10/15/25 %, rapportblackout som separat variant. ISK-skatt modelleras med användarspecifik grundnivå, inte som noll.
