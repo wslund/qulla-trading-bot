@@ -1,6 +1,6 @@
 # STRATEGY_SPEC – Qullamaggie long breakout
 
-**Version:** 0.2 (utkast, 2026-10-25). Granskad en gång (ChatGPT, v0.1); åtgärder införda, ej slutgodkänd. Backtestresultat refererar alltid till specversion och entry-modell.
+**Version:** 0.2.1 (utkast, 2026-10-25). Granskad en gång (ChatGPT, v0.1); åtgärder införda, ej slutgodkänd. Backtestresultat refererar alltid till specversion och entry-modell.
 
 Primärkälla för alla `[Q]`-regler: Kullamägi, *3 TIMELESS setups that have made me TENS OF MILLIONS*, <https://qullamaggie.com/my-3-timeless-setups-that-have-made-me-tens-of-millions/> (läst 2026-10-25). Endast breakout-setupen; Episodic Pivot och Parabolic Short ingår inte. Videon (<https://www.youtube.com/watch?v=xx8GvtAxilk>) är inte genomgången och åberopas inte.
 
@@ -90,10 +90,7 @@ Har en position både en exit-order (steg 1) och en aktiv stop samma dag, fylls 
 
 ## 7. Positionsstorlek `daily`
 
-- `[Q]` Risk per affär "usually 0.25-1%", för konton under några miljoner "0.5-1.5%". Max 30 % av kontot i en aktie över natten; typiskt 10–20 %.
-- `[T]` `shares = floor(equity × risk_per_trade / (fill − stop))`, därefter `min(shares, equity × max_position_pct / fill)`. Default `risk_per_trade = 0.005`, `max_position_pct = 0.20`. Slutliga värden: Q-005.
-- `[T]` `max_open_positions` (default 8) och `max_gross_exposure` (default 1.0, ingen hävstång). Källan anger inga portföljgränser utöver 30 % per aktie.
-- `[T]` `equity` = kontovärde vid stängning T−1 inklusive orealiserat resultat.
+Normativ källa: `RISK_MODEL.md` (§1 Qullamaggies principer, §2 våra regler, §3 testparametrar). Sammanfattning: `shares = floor(equity × risk_per_trade / (fill − stop))`, begränsat av `max_position_pct`, portföljgränser och avgiftsandel; `equity` = kontovärde vid stängning T−1. `[Q]` Risk per affär 0,25–1,5 %, max 30 % per aktie. Parametervärden är testvariabler (D-008, D-009).
 
 ## 8. Delvinst och trailing stop `daily`
 
@@ -152,7 +149,7 @@ Utan stöd i källan; värden ovan är startförslag.
 - P-002 `tightness_ratio`, `max_consol_depth`, `max_pct_below_high`, `max_closes_below_sma20` (§3) – kalibreras mot handplockade historiska exempel i fas 5
 - P-003 `vol_mult` och om volymfilter ska användas alls (§4)
 - P-004 `max_gap_entry`, `slippage_bps`, `latest_entry_time` (§5, §10)
-- P-005 `risk_per_trade`, `max_position_pct`, `max_open_positions` (§7) – beror på Q-005
+- P-005 riskparametrar (§7) – testas enligt `RISK_MODEL.md` §3
 - P-006 `partial_days` inom 3–5 och `partial_fraction` inom 1/3–1/2 (§8)
 - P-007 `trail_ma` 10 vs 20 (§8)
 - P-008 `regime_index`, `regime_ma`, filter på/av (§9)
@@ -166,6 +163,7 @@ Scannern enligt §1–4 skriver varje kandidat (även de som inte triggas) till 
 
 ## Versionshistorik
 
+- 0.2.1 (2026-10-25): §7 ersatt med hänvisning till `RISK_MODEL.md`. Inga regeländringar.
 - 0.2 (2026-10-25): efter granskning av v0.1. §2: `[Q]` och `[T]` separerade. §3: tightness-mått bytt till median av rullande 5-dagarsintervall, higher-lows-regel tillagd, `consol_min_days` 10→12. §5.1: samverkan ORB-high/breakoutnivå och tidsordning definierad. §5.2/§6: påståendet om "vidare stop" borttaget, invariant `stop < fill`, §6.1 exekveringsordning med konservativ hantering av tvetydiga samma-dagsutfall. §8: beslut vid stängning, exekvering nästa öppning. §11: blockbootstrap, regimuppdelning, kostnadskänslighet. §12: statistisk evidens (A) skild från affärsmål (B). Ej slutgodkänd.
 - 0.1 (2026-10-25): första utkast med `[Q]`-regler ur primärkällan, daily/intraday-separation, testprotokoll, acceptanskriterier och öppna parametrar. Ej granskad.
 - 0.0 (2026-10-12): skelett.

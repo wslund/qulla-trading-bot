@@ -31,6 +31,7 @@ qulla-trading-bot/
 │   ├── PROJECT_MASTER.md     # långsiktigt minne: mål, krav, arkitektur, arbetssätt
 │   ├── SESSION_HANDOFF.md    # aktuell status och nästa steg; startar varje ny AI-chatt
 │   ├── STRATEGY_SPEC.md      # mekanisk strategispecifikation, versionerad
+│   ├── RISK_MODEL.md         # money management: principer, regler, testparametrar
 │   └── DECISIONS.md          # beslutslogg och öppna frågor
 ├── src/tradingbot/
 │   ├── data/                 # hämtning, Parquet, point-in-time, kvalitet
