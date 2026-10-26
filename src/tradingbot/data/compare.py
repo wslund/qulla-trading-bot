@@ -23,6 +23,9 @@ def rebase(df: pd.DataFrame, basis: str) -> pd.DataFrame:
     if current != AS_TRADED:
         raise ValueError(f"cannot rebase {current} to {basis}: split/dividend data unavailable")
     out = df.copy()
+    needed = "split_ratio" if basis == SPLIT_ADJUSTED else "adj_factor"
+    if needed in out.columns and out[needed].isna().any():
+        raise ValueError(f"cannot rebase to {basis}: {needed} unknown (NaN) for this source")
     if basis == SPLIT_ADJUSTED:
         ratio = out["split_ratio"].to_numpy(float)
         future = np.cumprod(ratio[::-1])[::-1]  # product of ratios at and after each bar

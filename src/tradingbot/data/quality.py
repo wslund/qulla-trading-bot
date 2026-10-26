@@ -74,7 +74,8 @@ def _check_structure(df: pd.DataFrame, rep: QualityReport) -> None:
         rep.add(FAIL, f"{dup} duplicated dates")
     if not df["date"].is_monotonic_increasing:
         rep.add(FAIL, "dates not sorted ascending")
-    nulls = df[[*PRICE_COLUMNS, "volume", "adj_close"]].isna().sum()
+    # adj_close/split_ratio/dividend may be NaN ("unknown") for sources without that data.
+    nulls = df[[*PRICE_COLUMNS, "volume"]].isna().sum()
     for col, n in nulls.items():
         if n:
             rep.add(FAIL, f"{n} missing values in {col}")
@@ -145,7 +146,7 @@ def _check_splits(
     if len(df) < 2:
         return
     ratio = df["close"].to_numpy(float)[1:] / df["close"].to_numpy(float)[:-1]
-    split = df["split_ratio"].to_numpy(float)[1:]
+    split = np.nan_to_num(df["split_ratio"].to_numpy(float), nan=1.0)[1:]
     reported = split != 1.0
     expected = 1.0 / split[reported]
     off = np.abs(ratio[reported] / expected - 1.0) > split_tolerance
@@ -153,5 +154,5 @@ def _check_splits(
         rep.add(WARN, f"{int(off.sum())} reported splits where price move does not match ratio")
     jumps = (~reported) & ((ratio > 1 + jump_tolerance) | (ratio < 1 - jump_tolerance))
     if jumps.any():
-        days = df["date"].to_numpy()[1:][jumps][:5]
+        days = [str(d) for d in df["date"].to_numpy()[1:][jumps][:5]]
         rep.add(WARN, f"{int(jumps.sum())} unexplained close jumps >{jump_tolerance:.0%}: {days}")
