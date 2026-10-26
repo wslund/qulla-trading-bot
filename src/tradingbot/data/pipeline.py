@@ -43,6 +43,7 @@ def process(
         fetched_at=fetched_at or datetime.now(UTC),
         provider_version=raw.provider_version,
         adjustment_method=provider.adjustment_method,
+        notes=raw.notes,
     )
     store.write_raw(provider.name, raw.ticker, raw.frame)
     if raw.frame.empty:

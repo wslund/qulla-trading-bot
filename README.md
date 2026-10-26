@@ -22,7 +22,8 @@ Datahämtning (kräver nätverk, se `docs/DATA_PILOT.md`):
 uv run python scripts/ingest.py --source yahoo --tickers AAPL MSFT --start 2015-01-01
 uv run python scripts/ingest.py --source stooq --tickers AAPL MSFT --start 2015-01-01
 uv run python scripts/ingest.py --source alpaca --tickers AAPL MSFT --start 2016-01-01   # nycklar i .env
-uv run python scripts/compare_sources.py --a yahoo --b stooq --tickers AAPL MSFT --infer
+uv run python scripts/compare_sources.py --a yahoo --b alpaca --tickers AAPL MSFT --basis as_traded
+uv run python scripts/inspect_day.py --ticker MSFT --date 2020-03-18
 uv run python scripts/quality_report.py
 ```
 

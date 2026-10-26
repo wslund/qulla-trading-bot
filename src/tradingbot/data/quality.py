@@ -1,9 +1,10 @@
 """Data quality checks on a normalized daily-bar frame.
 
 Status semantics: FAIL = data must not be used (structural errors); WARN = usable but
-flagged (gaps, suspicious jumps); OK = no findings. Trading days are checked against an
-exchange calendar (default XNYS via exchange_calendars); pass ``calendar=None`` to fall
-back to a weekday-only check.
+flagged (gaps, suspicious jumps); INFO = noted for review, does not change status (large
+but internally consistent price moves such as crashes); OK = no findings.
+Trading days are checked against an exchange calendar (default XNYS via
+exchange_calendars); pass ``calendar=None`` to fall back to a weekday-only check.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import pandas as pd
 
 from tradingbot.data.schema import PRICE_COLUMNS, validate_columns
 
-OK, WARN, FAIL = "OK", "WARN", "FAIL"
+OK, INFO, WARN, FAIL = "OK", "INFO", "WARN", "FAIL"
+# Common split ratios; a jump close to 1/k (split) or k (reverse split) is split-like.
+SPLIT_LIKE_RATIOS = (1.5, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20, 25, 50, 100)
 _CALENDARS: dict[str, object] = {}
 
 
@@ -37,7 +40,7 @@ class QualityReport:
     def add(self, level: str, msg: str) -> None:
         self.issues.append(f"{level}: {msg}")
         if level == FAIL or (level == WARN and self.status == OK):
-            self.status = level
+            self.status = level  # INFO never changes status
 
 
 def check_quality(
@@ -153,6 +156,36 @@ def _check_splits(
     if off.any():
         rep.add(WARN, f"{int(off.sum())} reported splits where price move does not match ratio")
     jumps = (~reported) & ((ratio > 1 + jump_tolerance) | (ratio < 1 - jump_tolerance))
-    if jumps.any():
-        days = [str(d) for d in df["date"].to_numpy()[1:][jumps][:5]]
-        rep.add(WARN, f"{int(jumps.sum())} unexplained close jumps >{jump_tolerance:.0%}: {days}")
+    if not jumps.any():
+        return
+    split_known = not df["split_ratio"].isna().any()
+    vol = df["volume"].to_numpy(float)
+    vol_ratio = vol[1:] / np.where(vol[:-1] == 0, np.nan, vol[:-1])
+    dates = df["date"].to_numpy()[1:]
+    split_like, real_like = [], []
+    for i in np.flatnonzero(jumps):
+        if _is_split_like(ratio[i], vol_ratio[i]):
+            split_like.append(str(dates[i]))
+        else:
+            real_like.append(f"{dates[i]} ({ratio[i] - 1:+.0%})")
+    if split_like:
+        origin = "not in source's split list" if split_known else "source has no split data"
+        rep.add(WARN, f"{len(split_like)} split-like jumps, {origin}: {split_like[:5]}")
+    if real_like:
+        rep.add(
+            INFO, f"{len(real_like)} large moves >{jump_tolerance:.0%} (review): {real_like[:5]}"
+        )
+
+
+def _is_split_like(price_ratio: float, vol_ratio: float, tol: float = 0.03) -> bool:
+    """Price ratio near 1/k or k for a common k, with volume moving the opposite way.
+
+    A real crash or squeeze has no such ratio and volume rises with the move; a split
+    halves the price and roughly doubles the share volume.
+    """
+    for k in SPLIT_LIKE_RATIOS:
+        if abs(price_ratio * k - 1.0) <= tol and (np.isnan(vol_ratio) or vol_ratio > 1.3):
+            return True
+        if abs(price_ratio / k - 1.0) <= tol and (np.isnan(vol_ratio) or vol_ratio < 1 / 1.3):
+            return True
+    return False

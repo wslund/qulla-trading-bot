@@ -20,7 +20,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -54,6 +55,7 @@ class AlpacaProvider(MarketDataProvider):
         asof: str | None = None,
         max_retries: int = 5,
         sleep=time.sleep,
+        now=lambda: datetime.now(UTC),
     ) -> None:
         self.api_key = api_key or os.environ.get("ALPACA_API_KEY", "")
         self.secret_key = secret_key or os.environ.get("ALPACA_SECRET_KEY", "")
@@ -62,10 +64,32 @@ class AlpacaProvider(MarketDataProvider):
         self.asof = asof
         self.max_retries = max_retries
         self._sleep = sleep
+        self._now = now
+
+    def effective_end(self, end: date) -> tuple[date, str]:
+        """Cap ``end`` to the last New York date strictly before today (New York time).
+
+        Free/paper SIP subscriptions reject requests that touch the most recent 15 minutes
+        (HTTP 403 "subscription does not permit querying recent SIP data"). A date-only
+        ``end`` equal to today is interpreted by Alpaca as reaching into that window, so the
+        request is capped to yesterday; today's bar is picked up on the next run.
+        An explicit ``end`` in the past is sent unchanged.
+        """
+        ny_today = self._now().astimezone(ZoneInfo(BAR_TZ)).date()
+        last_safe = ny_today - timedelta(days=1)
+        if end >= ny_today:
+            return (
+                last_safe,
+                f"end capped {end.isoformat()} -> {last_safe.isoformat()} (SIP recent-data limit)",
+            )
+        return end, ""
 
     def fetch_daily(self, ticker: str, start: date, end: date) -> RawBars:
         if not self.api_key or not self.secret_key:
             raise AlpacaError("ALPACA_API_KEY / ALPACA_SECRET_KEY not set")
+        end, note = self.effective_end(end)
+        if end < start:
+            return RawBars(self.name, ticker, pd.DataFrame(), "alpaca v2 bars", notes=note)
         params = {
             "timeframe": "1Day",
             "start": start.isoformat(),
@@ -89,7 +113,7 @@ class AlpacaProvider(MarketDataProvider):
                 break
         frame = pd.DataFrame(bars, columns=RAW_COLUMNS + ["n", "vw"]) if bars else pd.DataFrame()
         version = f"alpaca v2 bars feed={self.feed} adjustment={self.adjustment}"
-        return RawBars(self.name, ticker, frame, provider_version=version)
+        return RawBars(self.name, ticker, frame, provider_version=version, notes=note)
 
     def _get(self, url: str, params: dict) -> dict:
         """GET with retries on 429 (Retry-After) and 5xx; other 4xx raise immediately."""

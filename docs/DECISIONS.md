@@ -11,6 +11,8 @@ Append-only. Nya beslut läggs sist med nästa nummer och datum. Öppna frågor 
 - **Q-005** Riskparametrar (risk per affär, exponering, förlustgränser). Startkapitalet avgjort i D-008; parametrarna är testvariabler enligt `RISK_MODEL.md` §3 och låses först efter backtest. Fas 2–6.
 - **Q-006** Etikettkälla för Modell A: regelbaserade etiketter, manuell märkning eller kombination. Avgörs före ML-fasen.
 - **Q-007** Stöder IBKR fraktionshandel i US-aktier på svenskt ISK? Antas **inte** förrän verifierat; positionsstorlek avrundas till hela aktier. Fas 1.
+- **Q-009** Volymdefinition: vilka trade conditions exkluderar Alpaca respektive Yahoo vid aggregering av dagsvolym? Avgör om skillnaden (3–9 % median) är en stabil faktor. Mäts med `compare_sources.py` (volB/volA IQR). Datapilot.
+- **Q-010** Alpaca rate limit och villkor för paper-/kostnadsfritt konto; vilka avnoterade symboler nås via `asof`. Datapilot.
 - **Q-008** Kan USD-saldo hållas på svenskt ISK hos IBKR, eller tvingas växling per affär? Antas **inte** förrän verifierat. Avgör hur FX-kostnad modelleras. Fas 1.
 
 ## Beslut
@@ -43,3 +45,9 @@ Startkapital för simulering är 10 000 SEK. Backtester körs även vid 50 000 o
 
 ### D-009 (2026-10-25) Riskmodellens struktur
 `docs/RISK_MODEL.md` är normativ källa för money management och delas i Qullamaggies dokumenterade principer, våra kompletterande regler, testbara parametrar och frågor som blockerar livehandel. Riskmotorn byggs som rena funktioner oberoende av ML. Inga parametervärden i dokumentet är beslutade; `risk_per_trade` testas som 0,5 % och 1 %, `max_cost_to_risk` som 10/15/25 %, rapportblackout som separat variant. ISK-skatt modelleras med användarspecifik grundnivå, inte som noll.
+
+### D-010 (2026-10-26, FÖRESLAGEN – kräver projektägarens godkännande) Volymkälla
+Volymbaserade regler (spec §1 likviditet, §4 eventuellt volymfilter) beräknas alltid på en och samma datakälla inom en körning, med relativa mått; källor blandas aldrig för volym. Vilken källa som är pilotens volymkälla avgörs när Q-009 (IQR-mätningen) är gjord. Motivering: Yahoo och Alpaca matchar i pris på 0,001 % men skiljer 3–9 % i volym, vilket är en definitionsskillnad.
+
+### D-011 (2026-10-26) Alpaca som pilotens as-traded-källa för priser
+Alpaca SIP raw (2016-01-04–) är pilotens referens för as-traded priser; Yahoo används för split- och utdelningsdata och som andra källa i jämförelser. Skäl: Alpaca levererar ojusterade priser direkt och täcker åtminstone en avnoterad serie (SIVB via `asof`); Yahoo kräver rekonstruktion och saknar SIVB. Inget av dem är survivorship-fritt (D-006, DATA_PILOT §6). Beslutet gäller piloten, inte valet av betald leverantör (Q-002).
