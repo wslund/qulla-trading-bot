@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from datetime import date, timedelta
 
+from tradingbot.config import load_dotenv
 from tradingbot.data.pipeline import get_provider
 
 
@@ -22,6 +23,7 @@ def main() -> None:
     ap.add_argument("--split-date", type=date.fromisoformat, required=True)
     ap.add_argument("--days", type=int, default=3)
     args = ap.parse_args()
+    load_dotenv()
 
     provider = get_provider(args.source)
     start = args.split_date - timedelta(days=args.days * 2)

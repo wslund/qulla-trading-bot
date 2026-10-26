@@ -1,6 +1,6 @@
 # DATA_PILOT – leverantörsoberoende datapilot
 
-**Version:** 0.2 (2026-10-25). Syfte: verifiera insamling, kvalitet och format för dagsdata från kostnadsfria källor innan ett betalt abonnemang väljs (Q-002). Ingen strategi- eller ML-kod.
+**Version:** 0.3 (2026-10-26). Syfte: verifiera insamling, kvalitet och format för dagsdata från kostnadsfria källor innan ett betalt abonnemang väljs (Q-002). Ingen strategi- eller ML-kod.
 
 > **Pilotdatasetet är inte verifierat survivorship-fritt.** Kostnadsfria källor levererar i huvudsak bolag som fortfarande är noterade. Data från piloten får användas för att testa pipelinen och jämföra källor, **inte** för definitiva lönsamhetsanspråk om strategin. Se §6.
 
@@ -12,12 +12,14 @@ src/tradingbot/data/
 ├── providers/
 │   ├── base.py        MarketDataProvider: fetch_daily() → RawBars, normalize() → DataFrame
 │   ├── yahoo.py       yfinance-adapter
-│   └── stooq.py       Stooq CSV-adapter
+│   ├── stooq.py       Stooq CSV-adapter
+│   └── alpaca.py      Alpaca Market Data v2 (bars), nycklar via .env
 ├── quality.py         check_quality() → QualityReport (OK / WARN / FAIL), XNYS-kalender
 ├── store.py           ParquetStore: raw, processed, metadata
 ├── compare.py         rebase() till gemensam prisbas, compare_series()
 ├── report.py          kvalitetsrapport per leverantör från metadata
 └── pipeline.py        process() (offline-testbar) och ingest() (nätverk)
+src/tradingbot/config.py  load_dotenv(): läser .env utan beroenden, loggar aldrig värden
 scripts/ingest.py, compare_sources.py, verify_split.py, quality_report.py
 ```
 
@@ -44,17 +46,20 @@ Motiv: as-traded behövs för realistisk simulering (hela aktier, kostnader, sto
 
 **Stooq (CSV, `https://stooq.com/q/d/l/?s=aapl.us&d1=…&d2=…&i=d`).** Kolumner `Date,Open,High,Low,Close,Volume`; inga split- eller utdelningskolumner. Stooq dokumenterar inte sin justering. Tredjepartskällor beskriver priserna som splitjusterade; om de också är utdelningsjusterade är okänt. Adaptern lagrar därför priserna oförändrade med `price_basis = split_adjusted`, `split_ratio = 1`, `dividend = 0`, `adj_factor = 1`, och as-traded rekonstrueras **inte**. Basen avgörs empiriskt: `scripts/compare_sources.py --a yahoo --b stooq --infer` jämför Stooq mot Yahoo uttryckt som `split_adjusted` respektive `total_return`; den bas som ger minst avvikelse är Stooqs. Om det visar sig vara `total_return` ändras adapterns etikett. Volym: Stooqs volym antas vara splitjusterad på samma sätt som priset (kontrolleras i samma jämförelse). Åtkomst: enligt tredjepartsprofil krävs sedan början av 2026 en API-nyckel från stooq.com (`STOOQ_API_KEY` i `.env`), det finns en opublicerad daglig kvot, och överskriden kvot ger ett felmeddelande med HTTP 200 – adaptern kastar `StooqError` i det fallet i stället för att lagra tomma serier.
 
-| | Yahoo (yfinance) | Stooq |
-|---|---|---|
-| Pris i råfil | splitjusterat, ej utdelningsjusterat | justerat, bas odokumenterad |
-| Utdelningsjusterad stängning | `Adj Close` | saknas |
-| Splitinformation | `Stock Splits` (kvot på splitdag) | saknas |
-| Utdelningar | `Dividends` | saknas |
-| Volym i råfil | splitjusterad | antas splitjusterad |
-| As-traded rekonstruerbar | ja | nej |
-| `price_basis` i lagrad serie | `as_traded` | `split_adjusted` (tills --infer säger annat) |
+| | Yahoo (yfinance) | Stooq | Alpaca (`adjustment=raw`) |
+|---|---|---|---|
+| Pris i råfil | splitjusterat, ej utdelningsjusterat | justerat, bas odokumenterad | ojusterat (as-traded) |
+| Utdelningsjusterad stängning | `Adj Close` | saknas | saknas |
+| Splitinformation | `Stock Splits` (kvot på splitdag) | saknas | saknas i bars |
+| Utdelningar | `Dividends` | saknas | saknas i bars |
+| Volym i råfil | splitjusterad | antas splitjusterad | ojusterad |
+| As-traded rekonstruerbar | ja | nej | är redan as-traded |
+| Rebas till annan bas | ja | nej | nej (NaN) |
+| `price_basis` i lagrad serie | `as_traded` | `split_adjusted` (tills --infer säger annat) | `as_traded` |
 
-**Alpaca:** ej implementerad; levererar råa priser med valbar justering via parameter.
+**Alpaca (Market Data API v2, `GET /v2/stocks/{symbol}/bars`).** Endast dataendpoints; inga trading-anrop. Nycklar `ALPACA_API_KEY`/`ALPACA_SECRET_KEY` från miljö eller `.env`; paper-nycklar fungerar. Pilotens konfiguration: `timeframe=1Day`, `feed=sip`, `adjustment=raw`, `limit=10000`, `sort=asc`, pagination via `next_page_token`. Alpacas dokumentation: `raw` "applies no adjustments"; övriga värden `split`, `dividend`, `spin-off`, `all` (kombinerbara). Med `raw` är OHLCV as-traded → `price_basis = as_traded`. Bars innehåller ingen split- eller utdelningsinformation, så `split_ratio`, `dividend`, `adj_close`, `adj_factor` lagras som NaN ("okänt") och serien kan **inte** rebasas till `split_adjusted` eller `total_return`; `rebase()` vägrar. Konsekvens för kvalitetskontrollen: en verklig split syns som "unexplained close jump" (WARN) tills splitdata hämtas (Alpacas corporate-actions-endpoint eller Yahoos splitlista – öppen fråga). Tidsstämplar `t` är UTC och konverteras till New York-datum. Felhantering: 429 och 5xx → ny försök med `Retry-After` eller exponentiell backoff, max 5; övriga 4xx → `AlpacaError` direkt; tomt svar (`bars: null/[]`) → tom serie → FAIL "no rows" i pipeline. Nycklar förekommer aldrig i metadata, fel eller loggar. `asof=YYYY-MM-DD` (`ingest.py --asof`) styr Alpacas symbolmappning för omdöpta/avnoterade tickers och används i SIVB-testet.
+
+Jämförelse Yahoo–Alpaca sker på basen `as_traded`: Yahoo är rekonstruerad as-traded, Alpaca är rå. Det är samma bas men olika väg dit; avvikelser avslöjar fel i Yahoos splitlista eller i rekonstruktionen. Yahoo och Alpaca antas **inte** ha samma justeringsbas i andra lägen (Alpacas `split`/`all` är odokumenterade i detalj och används inte).
 
 ## 4. Kvalitetskontroller (`quality.py`)
 
@@ -88,12 +93,13 @@ Metadata: källa, ticker, begärd och faktisk period, hämtningstidpunkt (UTC), 
 - **Avnoterade bolag:** SIVB (Silicon Valley Bank, avnoterad 2023) ger 0 rader från Yahoo (verifierat 2026-10-25). Det visar att Yahoo tar bort *denna* ticker; det bevisar inte att alla avnoterade bolag saknas – Yahoo behåller vissa under omdöpta tickers (t.ex. med suffix) och en del uppköpta bolag finns kvar. Stooq testas på `sivb.us` enligt §8; Stooq har rykte om att behålla fler avnoterade serier, vilket ska verifieras, inte antas. Slutsatsen för projektet står oavsett: inget av dessa universum kan byggas point-in-time utan en lista över historiska noteringar.
 - **Point-in-time:** inga noterings- eller avnoteringsdatum, ingen historisk tickeromdöpning, ingen sektor- eller rapportdata. Universumfilter (spec §1) kan inte byggas korrekt på piloten.
 - **Datakorrigeringar:** Yahoo ändrar historik retroaktivt (korrigerade splittar, utdelningar). Två hämtningar vid olika tidpunkter kan skilja sig; därför sparas hämtningstidpunkt och rådata.
+- **Alpaca – historiskt intervall och begränsningar (öppna frågor tills verifierade):** hur långt tillbaka SIP-dagsdata går för kostnadsfria/paper-konton (uppges ofta vara från 2016; verifieras med `ingest.py --source alpaca --start 2000-01-01` och `actual_start` i metadata); exakt rate limit (Alpaca hänvisar till `X-RateLimit-*`-headrar, vanligt angiven nivå 200 anrop/min); om avnoterade symboler kan nås via `asof`. Verifierat 2026-10-26 av projektägaren: ett anrop med paper-nycklar, `feed=sip`, `adjustment=raw`, 2024-01-02–2024-02-01 gav 22 staplar med giltiga värden.
 - **Villkor:** se §7.
 
 ## 7. Användningsvillkor
 
 - **Yahoo Finance via yfinance.** yfinance är inte knutet till, godkänt av eller granskat av Yahoo; paketet anger att det är avsett för forskning och utbildning och att Yahoos API "is intended for personal use only", med hänvisning till Yahoos villkor. Tolkning för projektet: piloten och privat forskning är förenliga med detta; en kommersiellt driven livebot på Yahoo-data är det sannolikt inte. Yahoo-data får inte vidaredistribueras (inte heller i repot). Projektägaren bör läsa Yahoos aktuella villkor själv – länkar finns i yfinance-paketets README.
-- **Alpaca.** Kräver konto och API-nyckel (via `.env`, se `.env.example`). Villkor läses när adaptern byggs.
+- **Alpaca.** Kräver konto och API-nyckel (via `.env`, se `.env.example`). Data via API för kontoinnehavarens eget bruk; vidaredistribution av SIP-data regleras av börsernas avtal. Projektägaren bekräftar aktuella villkor för sin kontotyp (öppen fråga i §8). Inga nycklar i git; `.env` är git-ignorerad.
 - **Stooq.** Stooqs egna villkor kunde inte hämtas från Claudes miljö (sajten blockerad). Känt från tredjepartsbeskrivningar: kostnadsfri CSV-nedladdning, daglig kvot, API-nyckel via CAPTCHA sedan 2026. **Projektägaren läser villkoren på stooq.com innan verkliga hämtningar görs** och noterar i §8 om personligt/icke-kommersiellt bruk och vidaredistribution. Tills dess: utvecklingsändamål, låg volym (tre tickers), ingen data i repot.
 
 ## 8. Körlogg
@@ -110,9 +116,14 @@ Fylls i av projektägaren efter lokala körningar (nätverk saknas i Claudes mil
 | | `ingest.py --source stooq --tickers AAPL MSFT NVDA SIVB --start 2015-01-01` | |
 | | `compare_sources.py --a yahoo --b stooq --tickers AAPL MSFT NVDA --infer` | vilken bas matchar? max/mean-avvikelse? |
 | | `quality_report.py > data/quality_report.md` | |
+| 2026-10-26 | Alpaca: manuellt anrop `/v2/stocks/AAPL/bars`, sip, raw, 2024-01-02..02-01 | 22 staplar, giltiga värden, ingen nästa sida |
+| | `ingest.py --source alpaca --tickers AAPL MSFT NVDA --start 2000-01-01` | `actual_start` = historikens början? antal rader? |
+| | `compare_sources.py --a yahoo --b alpaca --tickers AAPL MSFT NVDA --basis as_traded` | max/mean-avvikelse, dagar > tol, volym |
+| | `ingest.py --source alpaca --tickers SIVB --start 2015-01-01` och samma med `--asof 2023-03-01` | rader? `actual_end`? |
+| | Läs Alpacas villkor för kontotypen; notera rate limit ur `X-RateLimit-*` | |
 
 ## 9. Nästa steg
 
 1. Projektägaren kör §8 (Stooq-raderna) och fyller i utfallet. Om `--infer` pekar på `total_return` ändras Stooq-adapterns `price_basis`.
-2. Alpaca-adapter (nyckel via `.env`) om Stooq inte räcker som andra källa.
+2. Splitdata till Alpaca-serier (corporate-actions-endpoint eller Yahoos splitlista) om Alpaca blir pilotens huvudkälla; annars inte.
 3. Beslut Q-002 utifrån pilotens fynd och fas 1-researchen. Pilotens tydligaste resultat hittills: ingen kostnadsfri källa ger avnoterade bolag eller point-in-time-universum; det är det som ett betalt abonnemang måste köpa.
