@@ -35,7 +35,10 @@ def main() -> None:
         win = norm[(norm["date"] >= lo) & (norm["date"] <= hi)]
         print(f"=== {src} normalized ({win['price_basis'].iloc[0] if len(win) else '-'}) ===")
         print(win[NORM_COLS].to_string(index=False))
-        raw = pd.read_parquet(store.raw_path(src, args.ticker))
+        files = sorted(
+            store.raw_dir(src, args.ticker).glob("*.parquet"), key=lambda f: f.stat().st_mtime
+        )
+        raw = pd.concat([pd.read_parquet(f).assign(_file=f.name) for f in files], ignore_index=True)
         tcol = next((c for c in ("Date", "t") if c in raw.columns), None)
         if tcol:
             ts = pd.to_datetime(raw[tcol], utc=True).dt.tz_convert("America/New_York").dt.date

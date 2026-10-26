@@ -3,16 +3,16 @@
 Senast uppdaterad: 2026-10-26 (Claude, datapilot, session 4). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Datapilot steg 1–3 mergade (PR #5–#7), verifierade med verklig data: Alpaca 2016-01-04–, Yahoo–Alpaca pris matchar på 0,001 %, SIVB via `--asof`. **Hardening på grenen `feat/data-pilot-hardening`**: Alpaca `end` kapas till gårdagens NY-datum (403-fixen, noteras i metadata), kurshopp klassas splitliknande (WARN) eller verkligt (INFO, påverkar ej status), volymkvot median/IQR i jämförelsen, `scripts/inspect_day.py`, 13 regressionstester (61), DATA_PILOT v0.4 §10, D-010 (föreslagen) och D-011, Q-009/Q-010. Ej mergad.
+Datapilot steg 1–3 mergade (PR #5–#7), verifierade med verklig data: Alpaca 2016-01-04–, Yahoo–Alpaca pris matchar på 0,001 %, SIVB via `--asof`. **Hardening på grenen `feat/data-pilot-hardening`**: Alpaca `end` kapas till gårdagens NY-datum (403-fixen, noteras i metadata), kurshopp klassas splitliknande (WARN) eller verkligt (INFO, påverkar ej status), volymkvot median/IQR i jämförelsen, `scripts/inspect_day.py`, **upsert-policy för lagring** (kort hämtning krymper aldrig lagrad serie; rådata append-only; `--replace` explicit), jämförelsen anger datumintervall, 23 regressionstester (71), DATA_PILOT v0.4 §10, D-010 (föreslagen) och D-011, Q-009/Q-010. Ej mergad.
 
 ## Senaste beslut
 D-008 kapital, D-009 riskmodell, D-011 Alpaca som pilotens as-traded-källa. D-010 (volymkälla) föreslagen, ej godkänd.
 
 ## Pågående uppgift
-Granskning av PR `feat/data-pilot-hardening`. Efter merge: `inspect_day.py --ticker MSFT --date 2020-03-18` och `compare_sources.py --a yahoo --b alpaca ... --basis as_traded`; observationer in i DATA_PILOT §10.1–10.2; godkänn eller ändra D-010.
+Granskning och merge av PR `feat/data-pilot-hardening`. Efter merge: återställ full Alpaca-historik (`ingest.py --source alpaca --tickers AAPL MSFT NVDA --start 2000-01-01`), verifiera att en kort hämtning därefter inte krymper serien. MSFT 2020-03-18 och volymdefinitionen (DATA_PILOT §10) är dokumenterade som olösta; D-010 förblir föreslagen.
 
 ## Nästa steg
-1. Merge; körningar enligt DATA_PILOT §8 (två nya rader); D-010.
+1. Merge; återställ Alpaca-historik; Q-009 (volymdefinitioner) och MSFT-dagen utreds mot primärkällor (Nasdaq, Alpacas dokumentation) innan D-010 avgörs.
 2. Fas 5-start, avgränsat: regelbaserad scanner steg 1 = features (ADR20, SMA10/20/50, prior move, konsolideringsmått enligt spec §2–3) på lagrade Alpaca-serier, med look-ahead-tester (spec §11.2). Ingen trigger, ingen backtest.
 3. Point-in-time-universum: olöst, blockerar trovärdiga resultat (se handoff-svar 2026-10-26). Fas 1 (ChatGPT) Q-002 inriktas på noteringslistor med datum.
 4. Beslut om spec §12-nivåer före fas 6. Fas 3: dataset V0.2 enligt D-006.

@@ -83,12 +83,14 @@ Handelsdagar kontrolleras mot `exchange_calendars` (XNYS, laddad från 1990), so
 ## 5. Lagring och metadata
 
 ```
-data/raw/<source>/<TICKER>.parquet                  rå leverantörsdata
-data/processed/daily/<source>/<TICKER>.parquet      normaliserad
-data/processed/daily/<source>/<TICKER>.meta.json    metadata
+data/raw/<source>/<TICKER>/<start>_<end>_<hämtad>.parquet   en fil per hämtning, skrivs aldrig över
+data/processed/daily/<source>/<TICKER>.parquet              normaliserad serie, sammanslagen
+data/processed/daily/<source>/<TICKER>.meta.json            metadata för den lagrade serien
 ```
 
-Metadata: källa, ticker, begärd och faktisk period, hämtningstidpunkt (UTC), leverantörsversion, justeringsmetod, antal rader, kvalitetsstatus och lista över fynd, schemaversion. Allt under `data/` är git-ignorerat.
+**Skrivpolicy (sedan v0.4): upsert per datum.** Rader från en ny hämtning ersätter lagrade rader med samma datum; lagrade rader utanför det hämtade intervallet behålls. En kort hämtning (t.ex. `--start 2026-10-01`) kan därför aldrig krympa en längre historik – vilket var exakt vad som hände 2026-10-26 innan policyn infördes (17 dagar ersatte 2 718). `ingest.py --replace` kastar den lagrade serien uttryckligen. Sammanslagning vägras om `source` eller `price_basis` skiljer sig från den lagrade serien, och om den lagrade serien är schema v1 (då krävs `--replace`). Rådata är append-only: varje hämtning får en egen fil namngiven efter begärt intervall och hämtningstid.
+
+Metadata beskriver den **lagrade** serien efter sammanslagning: `actual_start`/`actual_end`/`rows` = täckning, `fetch_rows` = rader i senaste hämtningen, `write_mode`, `fetch_history` (en rad per hämtning), kvalitetsstatus och fynd för hela serien, `notes` (t.ex. kapat slutdatum), schemaversion. Allt under `data/` är git-ignorerat.
 
 ## 6. Kända begränsningar
 
@@ -125,19 +127,25 @@ Fylls i av projektägaren efter lokala körningar (nätverk saknas i Claudes mil
 | 2026-10-26 | `compare_sources.py --a yahoo --b alpaca --tickers AAPL MSFT NVDA --basis as_traded` | 2 718 gemensamma datum. AAPL max 0,14 % / medel 0,001 % / volym-median 5,6 % / 0 dagar > tol. MSFT max 2,23 % / 0,001 % / 8,8 % / 1 dag (2020-03-18). NVDA 0,11 % / 0,000 % / 3,4 % / 0 |
 | 2026-10-26 | `ingest.py --source alpaca --tickers SIVB --asof 2023-03-01` | 1 808 dagar 2016-01-04–2023-03-09; INFO-hopp 2023-03-09 (verkligt fall) |
 | 2026-10-26 | Alpaca AAPL/NVDA kvalitet | WARN splitliknande hopp (raw-serie saknar splitdata) – förväntat |
-| | `inspect_day.py --ticker MSFT --date 2020-03-18 --sources yahoo alpaca` | råa OHLCV båda källor, se §10.1 |
-| | `compare_sources.py --a yahoo --b alpaca --tickers AAPL MSFT NVDA --basis as_traded` (efter denna PR) | volB/volA median och IQR, se §10.2 |
+| 2026-10-26 | `ingest.py --source alpaca --tickers AAPL --start 2026-10-01` (utan `--end`) | 17 rader OK, `notes: end capped 2026-10-26 -> 2026-10-25`. **Skrev över 2 718-dagarsserien** → upsert-policy införd (§5) |
+| 2026-10-26 | `inspect_day.py --ticker MSFT --date 2020-03-18` | se §10.1 |
+| 2026-10-26 | `compare_sources.py --a yahoo --b alpaca ... --basis as_traded` | MSFT volB/volA median 1,096, IQR [1,002, 1,130]; NVDA 1,035, IQR [1,003, 1,053]; se §10.2 |
+| | `ingest.py --source alpaca --tickers AAPL MSFT NVDA --start 2000-01-01` (återställ full historik efter överskrivningen) | |
 | | Läs Alpacas villkor för kontotypen; notera rate limit ur `X-RateLimit-*` | |
 
 ## 10. Pågående undersökningar
 
 ### 10.1 MSFT 2020-03-18: 2,23 % skillnad i close
 
-Fakta: en enda dag av 2 718 avviker mer än 0,5 %; medelavvikelsen är 0,001 %. 2020-03-18 var en av de mest volatila dagarna under covid-kraschen med extremt intradagsintervall. Hypoteser som **inte** antas utan kontrolleras med `scripts/inspect_day.py`: (a) olika definition av dagens stängningskurs – officiellt stängningsauktionspris mot sista SIP-print; (b) en sen korrigerad print (trade correction) som en källa tagit med; (c) ett datafel i endera källan. Avgörande test: om Alpacas `h`/`l` innehåller Yahoos close och vice versa, och om open nästa dag ligger närmare den ena källans close. Observationer fylls i här efter körningen. Tills dess: ingen källa markeras som fel; dagen flaggas i jämförelsen och exkluderas inte.
+Fakta: en enda dag av 2 718 avviker mer än 0,5 %; medelavvikelsen är 0,001 %. 2020-03-18 var en av de mest volatila dagarna under covid-kraschen med extremt intradagsintervall. Hypoteser som **inte** antas utan kontrolleras med `scripts/inspect_day.py`: (a) olika definition av dagens stängningskurs – officiellt stängningsauktionspris mot sista SIP-print; (b) en sen korrigerad print (trade correction) som en källa tagit med; (c) ett datafel i endera källan. Avgörande test: om Alpacas `h`/`l` innehåller Yahoos close och vice versa, och om open nästa dag ligger närmare den ena källans close.
+
+**Observationer 2026-10-26 (`inspect_day.py`):** open, high och low är identiska i båda källorna. Close: Yahoo 140,399994, Alpaca 143,6038. Dagen efter (2020-03-19): Yahoo 142,710007, Alpaca 143,0000 – också olika, 0,2 %. Att OHL stämmer men close skiljer sig två dagar i rad pekar mot olika *definition* av stängningskurs (hypotes a eller b), inte ett isolerat datafel (c), men det är inte fastställt. Alpacas close på 2020-03-18 är dessutom ett "jämnt" tal (143,6038 ser ut som ett VWAP-liknande eller sent print-värde snarare än en auktionskurs); det är en observation, inte en slutsats. Nästa steg: kontrollera det officiella stängningspriset från Nasdaq (primärkälla) för båda dagarna, och granska Alpacas dokumentation om hur dagsstapelns `c` bestäms (sista trade i ordinarie handel? sista trade inkl. sena prints?). **Status: olöst.** Ingen källa markeras som fel.
 
 ### 10.2 Volym: Yahoo mot Alpaca
 
 Fakta: medianavvikelsen i volym är 3–9 % per aktie medan priserna matchar på 0,001 %. Det är alltså en systematisk definitionsskillnad, inte brus. Trolig orsak (hypotes): källorna aggregerar olika trade conditions – t.ex. udda poster, sena/korrigerade prints, prints utanför ordinarie handel. Alpaca dokumenterar en lista över exkluderade conditions för stapelaggregering; Yahoos definition är odokumenterad. `compare_sources.py` rapporterar nu `volB/volA` median och IQR: ett smalt IQR runt ett värde < 1 bekräftar en stabil faktor, ett brett IQR betyder dagvarierande skillnader.
+
+**Observationer 2026-10-26:** MSFT volB/volA (Alpaca/Yahoo) median 1,096, IQR [1,002, 1,130]; NVDA median 1,035, IQR [1,003, 1,053]. Alpaca rapporterar alltså **högre** volym än Yahoo, och kvoten varierar dag för dag (IQR-bredd 5–13 procentenheter) – det är inte en konstant faktor. Att kvoten är ≥ 1 i nästan hela fördelningen tyder på att Alpaca räknar med trade conditions som Yahoo utesluter (eller tvärtom att Yahoo filtrerar hårdare). Vilken definition som är "rätt" för strategin beror på vad likviditetsfiltret ska mäta; en varierande kvot gör att relativa mått skiljer sig något mellan källorna. **Status: olöst**, kräver att Alpacas och Yahoos aggregeringsregler fastställs (Q-009). D-010 förblir föreslagen.
 
 Konsekvens för strategin: spec §1 (likviditetsfilter) och eventuella volymregler i §4 använder **relativa** mått (volym mot egen 20-dagars medelvolym, dollaromsättning över tröskel). En stabil faktor på 0,9 påverkar sådana mått marginellt; blandning av källor gör det inte. Regel: **volym tas alltid från en och samma källa inom en körning**, och källan anges i resultatet. Vilken källa som blir pilotens volymkälla avgörs av IQR-resultatet (föreslaget D-010).
 

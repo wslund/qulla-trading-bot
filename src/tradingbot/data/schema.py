@@ -48,9 +48,12 @@ class FetchMeta:
     fetched_at: datetime
     provider_version: str
     adjustment_method: str
-    actual_start: date | None = None
+    actual_start: date | None = None  # coverage of the STORED series after merge
     actual_end: date | None = None
-    rows: int = 0
+    rows: int = 0  # rows in the stored series after merge
+    fetch_rows: int = 0  # rows returned by this fetch
+    write_mode: str = "upsert"  # upsert (merge by date) or replace
+    fetch_history: list[str] = field(default_factory=list)  # one line per fetch, newest last
     quality_status: str = "UNKNOWN"
     quality_issues: list[str] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION

@@ -26,6 +26,11 @@ def main() -> None:
         default=None,
         help="alpaca only: YYYY-MM-DD for symbol mapping of renamed/delisted tickers",
     )
+    ap.add_argument(
+        "--replace",
+        action="store_true",
+        help="discard the stored series instead of merging by date (default: upsert)",
+    )
     args = ap.parse_args()
     load_dotenv()
 
@@ -37,14 +42,22 @@ def main() -> None:
     store = ParquetStore(args.data_dir)
     for ticker in args.tickers:
         try:
-            meta = ingest(provider, store, ticker, args.start, args.end)
+            meta = ingest(
+                provider,
+                store,
+                ticker,
+                args.start,
+                args.end,
+                write_mode="replace" if args.replace else "upsert",
+            )
         except Exception as e:  # noqa: BLE001 - report and continue with next ticker
             print(f"{ticker:8s} ERROR {type(e).__name__}: {e}")
             continue
         issues = "; ".join(meta.quality_issues) or "-"
         print(
-            f"{ticker:8s} {meta.quality_status:4s} rows={meta.rows:5d} "
-            f"{meta.actual_start} .. {meta.actual_end}  {issues}"
+            f"{ticker:8s} {meta.quality_status:4s} fetched={meta.fetch_rows:5d} "
+            f"stored={meta.rows:5d} {meta.actual_start} .. {meta.actual_end} "
+            f"[{meta.write_mode}]  {issues}"
         )
 
 
