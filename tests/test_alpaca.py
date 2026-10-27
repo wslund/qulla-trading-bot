@@ -92,7 +92,9 @@ def test_normalize_as_traded_with_unknown_adjustments(monkeypatch, provider) -> 
     # Raw bars carry no split info, so the 2:1 split day is an "unexplained" jump: WARN.
     rep = check_quality(df)
     assert rep.status == WARN
-    assert any("unexplained close jumps" in i and "2024-03-12" in i for i in rep.issues)
+    assert any(
+        "split-like jumps, source has no split data" in i and "2024-03-12" in i for i in rep.issues
+    )
 
 
 def test_alpaca_matches_yahoo_as_traded(monkeypatch, provider, normalized) -> None:

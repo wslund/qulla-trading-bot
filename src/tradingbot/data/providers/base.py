@@ -17,6 +17,7 @@ class RawBars:
     ticker: str
     frame: pd.DataFrame
     provider_version: str
+    notes: str = ""  # provider remarks, e.g. an end date capped for subscription limits
 
 
 class MarketDataProvider(ABC):

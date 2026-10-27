@@ -37,7 +37,8 @@ def test_gap_warns(normalized: pd.DataFrame) -> None:
     rep = check_quality(df)
     assert rep.status == WARN
     assert any("5 XNYS sessions without data" in i for i in rep.issues)
-    assert any("unexplained close jumps" in i for i in rep.issues)
+    # 2:1 drop with ~doubled volume and no split in the list -> split-like.
+    assert any("split-like jumps, not in source's split list" in i for i in rep.issues)
 
 
 def test_exchange_holiday_is_not_a_gap() -> None:

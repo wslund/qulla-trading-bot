@@ -56,16 +56,26 @@ class CompareReport:
     close_max_rel_diff: float
     close_mean_rel_diff: float
     volume_median_rel_diff: float
+    volume_ratio_median: float  # median of b/a volume, signed view of systematic differences
+    volume_ratio_iqr: tuple[float, float]  # 25th/75th percentile of b/a volume
     close_days_over_tol: int
+    first_common: str = "-"
+    last_common: str = "-"
+    range_a: tuple[str, str] = ("-", "-")
+    range_b: tuple[str, str] = ("-", "-")
     dates_over_tol: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
-            f"{self.ticker} {self.source_a} vs {self.source_b} [{self.basis}]: "
-            f"common={self.common_days} "
+            f"{self.ticker} {self.source_a} vs {self.source_b} [{self.basis}] "
+            f"common={self.common_days} days {self.first_common}..{self.last_common} "
+            f"(A stored {self.range_a[0]}..{self.range_a[1]}, "
+            f"B stored {self.range_b[0]}..{self.range_b[1]}): "
             f"onlyA={self.only_in_a} onlyB={self.only_in_b} "
             f"close max={self.close_max_rel_diff:.2%} mean={self.close_mean_rel_diff:.3%} "
             f"volume median={self.volume_median_rel_diff:.1%} "
+            f"volB/volA median={self.volume_ratio_median:.3f} "
+            f"IQR=[{self.volume_ratio_iqr[0]:.3f}, {self.volume_ratio_iqr[1]:.3f}] "
             f"days>tol={self.close_days_over_tol}"
         )
 
@@ -98,7 +108,9 @@ def compare_series(
     va = ia.loc[common, "volume"].to_numpy(float)
     vb = ib.loc[common, "volume"].to_numpy(float)
     vrel = np.abs(va - vb) / np.where(vb == 0, np.nan, vb)
+    vratio = vb / np.where(va == 0, np.nan, va)
     over = rel > tol
+    has = len(common) > 0
     return CompareReport(
         ticker=ticker,
         source_a=str(a["source"].iloc[0]),
@@ -109,7 +121,17 @@ def compare_series(
         only_in_b=len(ib.index.difference(ia.index)),
         close_max_rel_diff=float(np.nanmax(rel)) if len(common) else float("nan"),
         close_mean_rel_diff=float(np.nanmean(rel)) if len(common) else float("nan"),
-        volume_median_rel_diff=float(np.nanmedian(vrel)) if len(common) else float("nan"),
+        volume_median_rel_diff=float(np.nanmedian(vrel)) if has else float("nan"),
+        volume_ratio_median=float(np.nanmedian(vratio)) if has else float("nan"),
+        volume_ratio_iqr=(
+            (float(np.nanpercentile(vratio, 25)), float(np.nanpercentile(vratio, 75)))
+            if has
+            else (float("nan"), float("nan"))
+        ),
         close_days_over_tol=int(np.nansum(over)),
+        first_common=str(common.min()) if has else "-",
+        last_common=str(common.max()) if has else "-",
+        range_a=(str(ia.index.min()), str(ia.index.max())),
+        range_b=(str(ib.index.min()), str(ib.index.max())),
         dates_over_tol=[str(d) for d in np.asarray(common)[over][:10]],
     )
