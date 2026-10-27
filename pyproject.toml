@@ -14,6 +14,8 @@ dependencies = [
 [project.optional-dependencies]
 # Nätverksadaptrar; krävs inte för tester.
 yahoo = ["yfinance>=0.2.50"]
+# Statiska bilder för visuell setup-validering (scripts/plot_setup.py).
+viz = ["matplotlib>=3.8"]
 
 [dependency-groups]
 dev = [

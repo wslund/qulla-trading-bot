@@ -10,7 +10,7 @@ Målet är långsiktigt positiv nettoavkastning efter alla kostnader, med strikt
 Kräver [uv](https://docs.astral.sh/uv/) och git. Python 3.12 laddas ner automatiskt av uv om den saknas.
 
 ```bash
-uv sync --all-extras         # skapar .venv och installerar beroenden (inkl. dev och yfinance)
+uv sync --all-extras         # skapar .venv och installerar beroenden (dev, yfinance, matplotlib)
 uv run pytest                # kör tester
 uv run ruff check .          # lint
 uv run ruff format --check . # formateringskontroll (uv run ruff format . rättar)
@@ -26,6 +26,7 @@ uv run python scripts/compare_sources.py --a yahoo --b alpaca --tickers AAPL MSF
 uv run python scripts/inspect_day.py --ticker MSFT --date 2020-03-18
 uv run python scripts/build_features.py --source yahoo --tickers AAPL MSFT NVDA
 uv run python scripts/scan.py --source yahoo --tickers AAPL MSFT NVDA --start 2020-01-01 --end 2020-12-31
+uv run python scripts/plot_setup.py --source yahoo --ticker NVDA --dates 2016-08-31 2017-06-27
 uv run python scripts/quality_report.py
 ```
 
@@ -50,7 +51,7 @@ qulla-trading-bot/
 │   └── DECISIONS.md          # beslutslogg och öppna frågor
 ├── src/tradingbot/
 │   ├── data/                 # hämtning, Parquet, point-in-time, kvalitet
-│   ├── scanner/              # features (steg 1), regelbaserad kandidatfiltrering (steg 2)
+│   ├── scanner/              # features (steg 1), kandidatfiltrering (steg 2), setup-bilder
 │   ├── backtesting/          # simulering, kostnader, R-multiplar, walk-forward
 │   └── risk/                 # positionsstorlek, exponeringsgränser
 ├── configs/                  # YAML: universum, kostnader, strategiparametrar

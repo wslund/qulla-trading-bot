@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 2 (kandidatfiltrering), 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 2 + visuell validering, 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -72,6 +72,18 @@ uv run python scripts/scan.py --source yahoo --tickers AAPL MSFT NVDA --start 20
 uv run python scripts/scan.py --source alpaca --tickers AAPL --splits-from yahoo --start 2024-01-01 --set min_adr=0.03
 ```
 
-## 8. Nästa steg (steg 3)
+## 8. Visuell setup-validering (`scanner/plot.py`)
+
+`scripts/plot_setup.py` ritar en statisk PNG per beslutsrad: OHLC-staplar och volym (`lookback` 120 staplar före, `lookahead` 20 efter), SMA10/20/50, konsolideringsfönstret (grönt), prior-move-toppen (lila), breakoutnivån (fönstrets högsta, streckad), beslutsdagen T (röd linje), samt en ruta med PASS/FAIL per aktiv regel och feature-värdena. Kräver `uv sync --extra viz` (matplotlib) och lagrade kandidater.
+
+Regler för vad bilden får visa:
+- Allt som markerar setupen (SMA-linjer, fönster, topp, breakoutnivå) stannar vid T−1. Staplar från T och framåt ritas grå som kontext och används inte för någon markering. Testat: `sma_last_date == asof_date`, `consol_end == asof_date`.
+- Feature-värden och regelutfall tas ur kandidattabellen som de är; inget räknas om i ritkoden, så bilden kan inte motsäga scannern.
+- Diagrammet ritas på splitjusterade priser (kontinuerligt över splittar); `close_prev` och SMA-nivåer i rubriken är i as-traded-enheter för T−1 och skalfaktorn visas.
+- `--near-misses` tar med rader som fallerar exakt en regel; titeln anger `near miss (8/9)` och rutan visar vilken.
+
+Syfte: kvalitativ granskning av att reglerna fångar det slags formationer specen beskriver – inte utvärdering av avkastning. Bilder hamnar under `data/plots/` (git-ignorerat).
+
+## 9. Nästa steg (steg 3)
 
 Breakout-trigger enligt spec §4 (`high[T] > breakout_level`) och entry-modellen `daily_stop_entry` (§5.2), med en kandidat per konsolidering. Kräver beslut om §12-nivåer före första backtest och ett point-in-time-universum (Q-002) för trovärdiga resultat. Kalibrering av P-002: välj 10–20 handplockade historiska formationer och kontrollera att de blir kandidater; justera trösklar med dokumenterad motivering.
