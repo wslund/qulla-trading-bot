@@ -25,6 +25,7 @@ uv run python scripts/ingest.py --source alpaca --tickers AAPL MSFT --start 2016
 uv run python scripts/compare_sources.py --a yahoo --b alpaca --tickers AAPL MSFT --basis as_traded
 uv run python scripts/inspect_day.py --ticker MSFT --date 2020-03-18
 uv run python scripts/build_features.py --source yahoo --tickers AAPL MSFT NVDA
+uv run python scripts/scan.py --source yahoo --tickers AAPL MSFT NVDA --start 2020-01-01 --end 2020-12-31
 uv run python scripts/quality_report.py
 ```
 
@@ -45,11 +46,11 @@ qulla-trading-bot/
 │   ├── STRATEGY_SPEC.md      # mekanisk strategispecifikation, versionerad
 │   ├── RISK_MODEL.md         # money management: principer, regler, testparametrar
 │   ├── DATA_PILOT.md         # datapilot: arkitektur, justering, kvalitet, begränsningar
-│   ├── SCANNER.md            # scanner: features (steg 1), tidskonvention, prisbas
+│   ├── SCANNER.md            # scanner: features (steg 1), regler (steg 2), tidskonvention
 │   └── DECISIONS.md          # beslutslogg och öppna frågor
 ├── src/tradingbot/
 │   ├── data/                 # hämtning, Parquet, point-in-time, kvalitet
-│   ├── scanner/              # features (steg 1); setup-detektion kommer i steg 2
+│   ├── scanner/              # features (steg 1), regelbaserad kandidatfiltrering (steg 2)
 │   ├── backtesting/          # simulering, kostnader, R-multiplar, walk-forward
 │   └── risk/                 # positionsstorlek, exponeringsgränser
 ├── configs/                  # YAML: universum, kostnader, strategiparametrar

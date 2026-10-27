@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 1 (features), 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 2 (kandidatfiltrering), 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -25,7 +25,7 @@ Splittar är den subtila läckan: bakåtjusterade serier skalar om *tidigare* st
 
 ## 4. Kolumner
 
-`date` (T), `asof_date` (T−1), `ticker`, `source`, `input_price_basis`, `close_prev`, `sma10/20/50` (nivåer i samma enheter som `close_prev`), `sma10/20/50_slope` (SMA[T−1]/SMA[T−11] − 1), `close_vs_sma20/50`, `adr20`, `prior_move_pct` (§2), `prior_move_peak_date`, `consol_days`, `consol_tightness` (§3, median av range5 sista/första tredjedel; NaN om fönstret < 12 dagar), `consol_higher_lows`, `consol_depth`, `consol_pct_below_high`, `consol_closes_below_sma20`, `spec_version`, `feature_version`.
+`date` (T), `asof_date` (T−1), `ticker`, `source`, `input_price_basis`, `close_prev`, `sma10/20/50` (nivåer i samma enheter som `close_prev`), `sma10/20/50_slope` (SMA[T−1]/SMA[T−11] − 1), `close_vs_sma20/50`, `adr20`, `dollar_volume_20d` (featureversion 1.1, additiv; median av close × volym i as-traded-enheter, för §1-filtret), `prior_move_pct` (§2), `prior_move_peak_date`, `consol_days`, `consol_tightness` (§3, median av range5 sista/första tredjedel; NaN om fönstret < 12 dagar), `consol_higher_lows`, `consol_depth`, `consol_pct_below_high`, `consol_closes_below_sma20`, `spec_version`, `feature_version`.
 
 Konsolideringsfönstret är (toppdag, T−1]. Toppen är första förekomsten av max close i `prior_move_window` (63). Ligger toppen i fönstrets första stapel är `prior_move_pct` NaN (ingen "före"-del).
 
@@ -40,6 +40,38 @@ uv run python scripts/build_features.py --source yahoo --tickers AAPL MSFT NVDA
 uv run python scripts/build_features.py --source alpaca --tickers AAPL MSFT NVDA --splits-from yahoo
 ```
 
-## 7. Nästa steg (steg 2)
+## 7. Steg 2 – regelbaserad kandidatfiltrering
 
-Setup-detektion: tillämpa spec §2–3-trösklar på featuretabellen, skriv kandidater med `candidate_id`; kalibrera P-002 mot handplockade historiska exempel. Kräver inget nytt i datalagret men blir meningsfullt först med ett point-in-time-universum (Q-002).
+`scanner/rules.py` tillämpar spec §1–3 på featuretabellen. Varje regel läser bara raden daterad T (som redan följer T−1-konventionen); ingen ny look-ahead införs. En regel vars indata saknas (NaN/None) är **underkänd**, aldrig godkänd, och regelnamnet skrivs i `missing_rules`. Avstängda regler (`None`) räknas inte i `rules_total`. Kandidat = alla aktiva regler godkända.
+
+| Regel | Villkor (spec) | Tröskel i `Thresholds` | Tagg |
+|---|---|---|---|
+| `prior_move` | `prior_move_pct ≥ min_prior_move` | 0,30 | `[T]` §2, värdet är nedre gränsen i `[Q]` "30–100 %+" |
+| `trend` | `close[T−1] > SMA50` och `SMA50[T−1] > SMA50[T−11]` | på | `[T]` §2 |
+| `consol_length` | `consol_days ∈ [12, 45]` | 12, 45 | `[T]` §3, ur `[Q]` "2 veckor–2 månader" |
+| `tightness` | `consol_tightness ≤ tightness_ratio` | 0,6 | `[T]` §3, P-002 |
+| `higher_lows` | `consol_higher_lows` | på | `[T]` §3, ur `[Q]` "higher lows" |
+| `depth` | `consol_depth ≤ max_consol_depth` | 0,25 | `[T]` §3, P-002 |
+| `position` | `consol_pct_below_high ≤ max_pct_below_high` | 0,10 | `[T]` §3, P-002 |
+| `closes_below_sma20` | `≤ max_closes_below_sma20` | 3 | `[T]` §3, P-002 |
+| `above_sma20` | `close[T−1] > SMA20` | på | `[T]` §3 |
+| `adr` | `min_adr ≤ adr20 ≤ max_adr` | **av** | `[H]` – källan säger uttryckligen att ADR inte används för urval; finns för test |
+| `price` | `close_prev ≥ min_price` | **av** | `[T]` §1, P-001 – specen anger inget värde |
+| `liquidity` | `dollar_volume_20d ≥ min_dollar_volume` | **av** | `[T]` §1, P-001 – specen anger inget värde |
+
+Inga nya tröskelvärden har införts; P-001/P-002-värdena är specens startförslag och kalibreras mot handplockade exempel innan de blir beslut. `[H]`- och P-001-regler slås på med `scripts/scan.py --set min_adr=0.03` etc.
+
+Utdata per rad: alla features + `rule_<namn>` (True/False/NA), `rules_passed`, `rules_total`, `missing_rules`, `is_candidate`, `candidate_id` (`TICKER:datum:spec0.2.1:rules1`, bara för kandidater), `rules_version`. Lagras i `data/candidates/<source>/<TICKER>.parquet` + `.meta.json` med källa, prisbas, indatans kvalitetsstatus (FAIL vägras, WARN noteras), täckning, `splits_from`, feature- och regelversion, specversion, alla trösklar med taggar, antal kandidater och godkännandegrad per regel.
+
+Observation från syntetiska tester: en formation som uppfyller alla villkor ger en kandidat **varje dag** så länge den håller (i testet 9 dagar i rad). Steg 3 (trigger, spec §4) avgör vilken dag som räknas; dedupe per konsolidering ("en kandidat triggas bara en gång", spec §4) hör dit.
+
+CLI:
+```bash
+uv run python scripts/scan.py --source yahoo --tickers AAPL MSFT NVDA --date 2020-08-31
+uv run python scripts/scan.py --source yahoo --tickers AAPL MSFT NVDA --start 2020-01-01 --end 2020-12-31 --near-misses
+uv run python scripts/scan.py --source alpaca --tickers AAPL --splits-from yahoo --start 2024-01-01 --set min_adr=0.03
+```
+
+## 8. Nästa steg (steg 3)
+
+Breakout-trigger enligt spec §4 (`high[T] > breakout_level`) och entry-modellen `daily_stop_entry` (§5.2), med en kandidat per konsolidering. Kräver beslut om §12-nivåer före första backtest och ett point-in-time-universum (Q-002) för trovärdiga resultat. Kalibrering av P-002: välj 10–20 handplockade historiska formationer och kontrollera att de blir kandidater; justera trösklar med dokumenterad motivering.
