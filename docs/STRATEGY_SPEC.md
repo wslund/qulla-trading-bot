@@ -151,7 +151,13 @@ Utan stöd i källan; värden ovan är startförslag.
   - `[H]` P-002b: `max_closes_below_sma20 = 3` kan vara för strängt. NVDA jan–feb 2017 fälldes på detta trots stark föregående uppgång. Att testa: 5, eller att räkna andelen av fönstret i stället för antal (längre fönster tillåts fler).
   - `[H]` P-002c: `prior_move_window = 63` med krav på 30 % kan missa konsolideringar efter en uppgång som ligger strax utanför fönstret (NVDA okt 2017, juni 2018). Att testa: 90 dagar, eller att mäta uppgången från fönstrets lägsta i stället för lägsta *före* toppen. Risk: fler falska kandidater.
   - `[H]` P-002d: samma formation ger kandidater flera dagar i rad (NVDA 2016-08-31 och 09-01). Det är inte en tröskelfråga utan hör till §4: en kandidat per konsolidering (nu synlig som `setup_group_id`).
-  - Kalibrering kräver fler bolag än tre megacaps; se SCANNER.md §9.
+  - Hypoteser från bredare visuell granskning 2026-10-27 (16 ytterligare aktier via Yahoo och Alpaca, 162 kandidatdagar i 57 setup-grupper; AMD, TTD, ETSY, ZM, PTON, UPST och NVDA granskade i bild; inga trösklar ändrade):
+    - `[H]` P-002e: reglerna fångar tydliga momentumformationer (ETSY, ZM) och rimliga men volatila (AMD, PTON). Bekräftar att §3-mekaniseringen inte är uppenbart fel; säger inget om utfall.
+    - `[H]` P-002f: TTD 2018-03-14 klarade reglerna trots att uppgången kom efter en längre svag period. `prior_move` mäter bara 63 dagar; ett längre trendkrav (t.ex. pris över SMA150/200, eller 6-månadersrankning enligt §2:s variant) kan skilja "ledare" från "studs". Att testa som tillägg, inte ersättning.
+    - `[H]` P-002g: UPST 2024-11-27 klarade reglerna med ADR20 8,2 % och 20,8 % över SMA20. Hög ADR ger vid stop enligt §6 (max ADR) och därmed liten position; stor distans till SMA20 antyder sen entry. `[H]`-regeln `max_adr` och ett tak på `close_vs_sma20` är kandidater att testa – källan nämner inget av dem som urvalskrav.
+    - `[H]` P-002h: NVDA 2017-06-27 bekräftat med diagnostik: 1,5 % under SMA10 och −3,3 % på fem dagar vid 9/9 regler. Stöder P-002a (korttidsmomentum som tilläggskrav eller snävare `max_pct_below_high`).
+    - `[H]` P-002i: NVDA okt 2017 och juni 2018 fälldes av `prior_move` vid 20–21 % uppgång. Stöder P-002c; alternativt test: `min_prior_move` 0,20–0,25 med krav på att toppen är ett 52-veckorshögsta (källan: "near the highs").
+  - Kalibrering kräver systematisk räkning (andel visuellt godkända formationer som blir kandidater, och tvärtom) över alla 16+3 aktier innan någon tröskel ändras; se SCANNER.md §9.
 - P-003 `vol_mult` och om volymfilter ska användas alls (§4)
 - P-004 `max_gap_entry`, `slippage_bps`, `latest_entry_time` (§5, §10)
 - P-005 riskparametrar (§7) – testas enligt `RISK_MODEL.md` §3
