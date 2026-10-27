@@ -80,3 +80,79 @@ def build_features(
 
 def read_features(store: ParquetStore, source: str, ticker: str) -> pd.DataFrame:
     return pd.read_parquet(features_path(store, source, ticker))
+
+
+# --- step 2: candidates -----------------------------------------------------------------------
+
+
+def candidates_path(store: ParquetStore, source: str, ticker: str) -> Path:
+    return store.root / "candidates" / source / f"{ticker.upper()}.parquet"
+
+
+def build_candidates(
+    store: ParquetStore,
+    source: str,
+    ticker: str,
+    *,
+    thresholds=None,
+    built_at: datetime | None = None,
+) -> dict:
+    """Apply the rules to the stored feature table and write Parquet + .meta.json.
+
+    Refuses when the feature table is missing or its input series had quality FAIL.
+    WARN is allowed and recorded in the metadata.
+    """
+    from tradingbot.scanner.rules import (
+        RULE_TAGS,
+        RULES_VERSION,
+        RuleSummary,
+        Thresholds,
+        apply_rules,
+        thresholds_dict,
+    )
+
+    th = thresholds or Thresholds()
+    fpath = features_path(store, source, ticker)
+    if not fpath.exists():
+        raise FileNotFoundError(f"no feature table for {source}/{ticker}; run build_features first")
+    fmeta = json.loads(fpath.with_suffix(".meta.json").read_text(encoding="utf-8"))
+    if fmeta.get("input_quality_status") == "FAIL":
+        raise ValueError(f"{source}/{ticker}: input series quality FAIL; refusing to scan")
+    feats = pd.read_parquet(fpath)
+    if fmeta.get("feature_version") != FEATURE_VERSION:
+        raise ValueError(
+            f"{source}/{ticker}: feature table version {fmeta.get('feature_version')} != "
+            f"{FEATURE_VERSION}; rebuild features"
+        )
+    cands = apply_rules(feats, th)
+    summary = RuleSummary.of(cands)
+    meta = {
+        "source": source,
+        "ticker": ticker.upper(),
+        "input_price_basis": fmeta.get("input_price_basis"),
+        "input_quality_status": fmeta.get("input_quality_status"),
+        "input_coverage": fmeta.get("input_coverage"),
+        "splits_from": fmeta.get("splits_from"),
+        "feature_version": fmeta.get("feature_version"),
+        "feature_built_at": fmeta.get("built_at"),
+        "spec_version": SPEC_VERSION,
+        "rules_version": RULES_VERSION,
+        "thresholds": thresholds_dict(th),
+        "rule_tags": RULE_TAGS,
+        "rows": summary.rows,
+        "candidates": summary.candidates,
+        "pass_rate_by_rule": summary.pass_rate_by_rule,
+        "built_at": (built_at or datetime.now(UTC)).isoformat(),
+        "disclaimer": fmeta.get("disclaimer"),
+    }
+    out = candidates_path(store, source, ticker)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cands.to_parquet(out, index=False)
+    out.with_suffix(".meta.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return meta
+
+
+def read_candidates(store: ParquetStore, source: str, ticker: str) -> pd.DataFrame:
+    return pd.read_parquet(candidates_path(store, source, ticker))

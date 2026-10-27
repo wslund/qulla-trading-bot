@@ -25,7 +25,7 @@ import pandas as pd
 from tradingbot.data.compare import rebase
 from tradingbot.data.schema import AS_TRADED, SPLIT_ADJUSTED
 
-FEATURE_VERSION = "1"
+FEATURE_VERSION = "1.1"  # 1.1: added dollar_volume_20d (additive; existing formulas unchanged)
 SPEC_VERSION = "0.2.1"
 
 
@@ -62,6 +62,7 @@ FEATURE_COLUMNS = [
     "close_vs_sma20",
     "close_vs_sma50",  # close[T-1] / SMA - 1
     "adr20",  # mean(high/low - 1) over adr_window bars
+    "dollar_volume_20d",  # median(close * volume) over adr_window bars, as-traded units
     "prior_move_pct",  # spec §2: window max / min-before-max - 1
     "prior_move_peak_date",
     "consol_days",  # bars after the peak up to T-1
@@ -143,6 +144,13 @@ def compute_features(df: pd.DataFrame, params: FeatureParams | None = None) -> p
     for w in p.sma_windows:
         slopes[w][: p.slope_lookback] = np.nan
     adr = pd.Series(high / low - 1).rolling(p.adr_window).mean().to_numpy()
+    # close * volume is invariant to split adjustment, so the input frame can be used directly.
+    dollar_volume = (
+        pd.Series(df["close"].to_numpy(float) * df["volume"].to_numpy(float))
+        .rolling(p.adr_window)
+        .median()
+        .to_numpy()
+    )
     range5 = (
         pd.Series(high).rolling(p.range_window).max().to_numpy()
         - pd.Series(low).rolling(p.range_window).min().to_numpy()
@@ -169,6 +177,7 @@ def compute_features(df: pd.DataFrame, params: FeatureParams | None = None) -> p
                 "close_vs_sma20": close[i] / smas[20][i] - 1,
                 "close_vs_sma50": close[i] / smas[50][i] - 1,
                 "adr20": adr[i],
+                "dollar_volume_20d": dollar_volume[i],
                 "prior_move_pct": pm,
                 "prior_move_peak_date": df["date"].iloc[peak_idx] if peak_idx is not None else None,
                 **cons,

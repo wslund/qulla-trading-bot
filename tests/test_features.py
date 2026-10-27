@@ -264,7 +264,7 @@ def test_build_features_writes_parquet_and_meta(tmp_path: Path) -> None:
     assert len(f) == len(df) - 1
     assert m["input_price_basis"] == AS_TRADED and m["input_rows"] == len(df)
     assert m["input_coverage"] == [str(df["date"].iloc[0]), str(df["date"].iloc[-1])]
-    assert m["feature_version"] == "1" and m["spec_version"] == "0.2.1"
+    assert m["feature_version"] == "1.1" and m["spec_version"] == "0.2.1"
     assert m["first_complete_date"] == str(df["date"].iloc[63])  # prior_move needs 63 bars
     assert "not evidence" in m["disclaimer"]
     assert (tmp_path / "features" / "test" / "SYN.meta.json").exists()

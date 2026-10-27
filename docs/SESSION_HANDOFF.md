@@ -1,21 +1,21 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-26 (Claude, scanner steg 1). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-10-26 (Claude, scanner steg 2). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Datapilot klar (PR #5–#7 mergade; hardening PR #8 låg **omergad** på GitHub när denna gren skapades – grenen `feat/scanner-features` utgår därför från `feat/data-pilot-hardening`). **Scanner steg 1 på grenen `feat/scanner-features`**: `scanner/features.py` (spec §2–3, T−1-konvention, splitsäker), `scanner/pipeline.py` + `scripts/build_features.py` (Parquet + metadata), `attach_splits()` för Alpaca raw med Yahoos splitlista, 11 tester (82 totalt), `docs/SCANNER.md`. Ej mergad.
+Datapilot och scanner steg 1 mergade (PR #5–#8), features validerade över AAPL-splitten på Yahoo och Alpaca. **Scanner steg 2 på grenen `feat/scanner-rules`**: `scanner/rules.py` (spec §1–3 som regler med taggar, saknade värden = underkänt, [H]/P-001 av som default), `build_candidates` + `scripts/scan.py` (datum/period, near misses, `--set` för trösklar), additiv feature `dollar_volume_20d` (featureversion 1.1), 18 tester (100), `SCANNER.md` §7. Ej mergad.
 
 ## Senaste beslut
 D-008 kapital, D-009 riskmodell, D-011 Alpaca som pilotens as-traded-källa. D-010 (volymkälla) föreslagen, ej godkänd.
 
 ## Pågående uppgift
-Merge av PR #8 (hardening) och därefter PR `feat/scanner-features`. Sedan: projektägaren kör `build_features.py` på yahoo och alpaca (`--splits-from yahoo`) och granskar featurerader runt kända formationer.
+Granskning av PR `feat/scanner-rules`. Efter merge: `build_features.py` måste köras om (featureversion 1.1), sedan `scan.py` på yahoo/alpaca för 2016–2026; granska kandidatdatum mot kurvor för AAPL/MSFT/NVDA som funktionstest, inte som edge.
 
 ## Nästa steg
-1. Merge #8 och scanner-PR:en; kör `build_features.py`; jämför features yahoo vs alpaca (ska vara identiska upp till prisavvikelserna i DATA_PILOT §10).
-2. Scanner steg 2: setup-detektion med spec-trösklar → kandidattabell med `candidate_id`; kalibrering av P-002 mot handplockade exempel.
-3. Point-in-time-universum (Q-002) är fortsatt blockerande för trovärdiga resultat. Fas 1 (ChatGPT).
-4. Q-009 (volymdefinitioner), MSFT 2020-03-18, D-010 – olösta. Beslut om spec §12-nivåer före fas 6.
+1. Merge; kör om features och scan; notera antal kandidater och godkännandegrad per regel (`.meta.json`).
+2. Kalibrering P-002: 10–20 handplockade historiska formationer → blir de kandidater? Dokumenterade justeringar.
+3. Steg 3: trigger (§4) + `daily_stop_entry` (§5.2) med en kandidat per konsolidering. Före det: beslut om §12-nivåer.
+4. Point-in-time-universum (Q-002), Q-009, MSFT 2020-03-18, D-010 – olösta.
 
 ## Öppna frågor
 Q-001–Q-010 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmatris i `RISK_MODEL.md` §3.
