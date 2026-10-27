@@ -1,6 +1,6 @@
 # Scanner steg 3 – teknisk design: trigger, ORB, dedupe, risk
 
-**Status:** designutkast v0.3, 2026-10-27, reviderad efter ChatGPT-granskning av v0.2 (åtta rättelser); ingen implementation. Bygger på `STRATEGY_SPEC.md` v0.2.1 §4–8, §11–12, `RISK_MODEL.md` v0.2, `SCANNER.md` steg 1–2, `DATA_PILOT.md`. Taggar som i specen: `[Q]` källa, `[T]` tolkning, `[H]` hypotes. **Designval** markeras `[D]` och är förslag som granskas innan kod skrivs.
+**Status:** v0.3 godkänd 2026-10-27 av projektägaren efter ChatGPT-granskning (`ab98437`). D-012 (acceptanskriterier), D-013 (fyllningspolicy) och D-014 (dedupe) fastställda i `DECISIONS.md`. Nästa steg: implementation 3a. Bygger på `STRATEGY_SPEC.md` v0.2.1 §4–8, §11–12, `RISK_MODEL.md` v0.2, `SCANNER.md` steg 1–2, `DATA_PILOT.md`. Taggar som i specen: `[Q]` källa, `[T]` tolkning, `[H]` hypotes. **Designval** markeras `[D]` och är förslag som granskas innan kod skrivs.
 
 > Steg 3 producerar *signaler och simulerade affärer*, inte order. Resultat från steg 3 är fortfarande ett funktionstest på överlevande aktier utan point-in-time-universum (DATA_PILOT §6) och får inte kallas edge.
 
@@ -126,7 +126,7 @@ Antal **och andel** `ambiguous_*`, `gap_fill`, `stop_gap` (med fördelning av `l
 Allt enligt RISK_MODEL v0.2; här bara vad som behövs för en ticker i taget (portföljgränser över flera tickers kommer med backtestmotorn).
 
 - `equity_start = 10 000 SEK` (D-008), `fx_rate` parameter (konstant i v1, `[D]` 10,5 som placeholder tills Q-003 ger serie), `fx_mode` båda scenarierna (RISK_MODEL §2.8).
-- **Acceptans före affären, på antagen fyllning `[D]`:** när fyllningen antas (§4.1) beräknas, *innan affären accepteras i simuleringen*, med den antagna fyllningen: `actual_risk = shares × (fill − stop)`, kostnader för tre ordrar, kapitalbehov `shares × fill + kostnader`. Affären accepteras bara om `actual_risk ≤ risk_amount × (1 + risk_overshoot_tolerance)`, `cost_to_risk ≤ max_cost_to_risk` och kapitalet räcker; annars registreras signalen med orsak (`risk_exceeded`, `cost_to_risk`, `insufficient_capital`) och **ingen affär**. `shares` bestäms först på `fill_est` (`level`/`trigger`) för att spegla ordern, och räknas sedan om nedåt på antagen fyllning om gränsen annars bryts (i verkligheten: ordern hade lagts med färre aktier eller inte alls; det är exekveringsosäkerhet och flaggas `shares_reduced_at_fill`). En reduktion vid dagens stängning (RISK_MODEL §2.1.7) är skadebegränsning i drift och används **aldrig** i simuleringen för att hävda att den initiala riskgränsen hölls.
+- **Acceptans före affären, på antagen fyllning `[D]`:** när fyllningen antas (§4.1) beräknas, *innan affären accepteras i simuleringen*, med den antagna fyllningen: `actual_risk = shares × (fill − stop)`, kostnader för tre ordrar, kapitalbehov `shares × fill + kostnader`. Affären accepteras bara om `actual_risk ≤ risk_amount × (1 + risk_overshoot_tolerance)`, `cost_to_risk ≤ max_cost_to_risk` och kapitalet räcker; annars registreras signalen med orsak (`risk_exceeded`, `cost_to_risk`, `insufficient_capital`) och **ingen affär**. `shares` bestäms först på `fill_est` (`level`/`trigger`) för att spegla ordern, och räknas sedan om nedåt på antagen fyllning om gränsen annars bryts (i verkligheten: ordern hade lagts med färre aktier eller inte alls; det är exekveringsosäkerhet och flaggas `shares_reduced_at_fill` och är per D-013 ett *kontrafaktiskt* scenario som redovisas skilt från affärer som klarade gränserna med ursprungligt antal). En reduktion vid dagens stängning (RISK_MODEL §2.1.7) är skadebegränsning i drift och används **aldrig** i simuleringen för att hävda att den initiala riskgränsen hölls.
 - `position_size(equity_usd, fill_est, stop, params)`: `risk_amount = equity × risk_per_trade` (0,5 % och 1 % som testvarianter, inte låst), `shares = floor(risk_amount / (fill_est − stop))`, tak `max_position_pct` 0,25, golv `min_position_value` 100 USD, hela aktier (Q-007 öppen).
 - **Exekveringsosäkerhet (dokumenterad, inte modellerad bort):** en köp-stop i verkligheten fylls till okänt pris vid gap; vi antar `open` resp. `trigger` plus slippage-scenario. Minutstaplar visar inte om vår order hade fått fyllning i stapeln (likviditet, kö). Båda är antaganden som gör simuleringen *optimistisk* för tunna aktier; §1-filtren (P-001) är det som begränsar den risken och de är ännu av.
 - `CostModel`: `commission = max(min_commission, per_share × shares)` per order (Tiered 0,35 USD / 0,0035 per aktie, delvis verifierat; Fixed 1 USD / 0,005 som variant), `slippage_bps` per sida är ett **scenarioantagande, inte en uppmätt kostnad** (P-004): inga kurser (bid/ask) finns i minutstaplarna, så spread och slippage kan inte mätas. Körningar görs alltid med tre scenarier, `[D]` 5/10/20 bps, och resultatet redovisas per scenario; ett resultat som bara håller vid 5 bps räknas inte som robust (§11.8). Mätning blir möjlig först med kursdata eller paper trading. FX: `usd_balance` → kostnad vid insättning (engång), `per_trade` → `fx_cost_bps` på varje köp och sälj.
@@ -176,22 +176,22 @@ Yahoo har ingen användbar minuthistorik (bara ~30 dagar) och ingår inte.
 
 | # | Beslut | Spec/källa | Typ | Förslag |
 |---|---|---|---|---|
-| 1 | Acceptansnivåer §12 A och B – se tabellen nedan, oförändrad ur specen | §12 | `[T]`, P-011 | Godkänn som D-012 **innan** steg 3f körs; annars finns ingen stoppregel mot parameterfiske |
+| 1 | Acceptansnivåer §12 A och B – se tabellen nedan, oförändrad ur specen | §12 | `[T]`, P-011 | **D-012 fastställd** |
 | 2 | `risk_per_trade` | RISK_MODEL §3 | `[Q]`-intervall | testa 0,005 och 0,01, ingen låsning |
 | 3 | `slippage_bps`, `commission_model` | §10, P-004, P-010, Q-003 | `[T]` | 10 bps + Tiered som placeholder, märkt antagande; känslighet ×1,5/×2 enligt §11.8 |
 | 4 | `fx_mode`, `fx_rate` | RISK_MODEL §2.8, Q-008 | öppet | båda lägen, konstant kurs |
 | 5 | `max_gap_entry` | §5, P-004 | `[T]` | 0,05 |
 | 6 | `orb_minutes` | §5.1, P-009 | `[T]` 5 (källan: 1/5/60 diskretionärt) | 5 först, 1 och 60 som varianter |
 | 7 | `latest_entry_time` | §5.1, P-004 | `[T]` | close − 30 min |
-| 8 | Dedupe-nyckel `(ticker, peak_date)` i stället för `setup_group_id` | §4 | `[D]` | ja, enligt §3 ovan |
+| 8 | Dedupe-nyckel `(ticker, peak_date)` i stället för `setup_group_id` | §4 | `[D]` | **D-014 fastställd** |
 | 9 | En position per ticker | RISK_MODEL §2.2 | `[T]` | ja |
 | 10 | `max_armed_days` – hur länge en topp får vara armerad utan trigger | – | `[H]` | ingen gräns i v1; gruppen tar slut när reglerna slutar gälla |
 | 11 | Ofullständig opening range | – | `[D]` | ingen entry (konservativt) |
 | 12 | Samma-dagsstopp i dagsmodellen | §6.1.4 | `[T]` | konservativt −1R, räknas och rapporteras |
-| 13 | Fyllningspolicy §4.1 (gap igenom nivån → open; samma stapel entry+stop → stoppad) | §5–6 | `[D]` | lås som D-013 före 3c |
+| 13 | Fyllningspolicy §4.1 (gap igenom nivån → open; samma stapel entry+stop → stoppad) | §5–6 | `[D]` | **D-013 fastställd** |
 | 14 | Initial stop i ORB använder bara staplar före fyllningsstapeln | §6 | `[D]` | ja; ORB-staplarnas lägsta om fyllning sker direkt efter opening range |
 | 15 | Sessionsfilter `open ≤ t < close` från XNYS-kalendern; 16:00-stapeln utesluts | – | `[D]` | ja; `sparse_session` vid > 5 % saknade staplar |
-| 16 | Förbrukning permanent per key; ny affär kräver ny giltig kandidatrad med ny key (ingen släppregel) | §4 | `[D]` | ja; `rearm_after_days` som `[H]`-variant |
+| 16 | Förbrukning permanent per key; ny affär kräver ny giltig kandidatrad med ny key (ingen släppregel) | §4 | `[D]` | **D-014 fastställd** |
 | 17 | Slippage som scenario 5/10/20 bps, aldrig "uppmätt" | §10, P-004 | `[D]` | ja; rapport per scenario |
 | 18 | Append-only minutdata med `fetched_at`; `revised_bars`-flagga vid omhämtning | – | `[D]` | ja |
 
