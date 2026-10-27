@@ -1,21 +1,21 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-26 (Claude, datapilot, session 4). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-10-26 (Claude, scanner steg 1). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Datapilot steg 1–3 mergade (PR #5–#7), verifierade med verklig data: Alpaca 2016-01-04–, Yahoo–Alpaca pris matchar på 0,001 %, SIVB via `--asof`. **Hardening på grenen `feat/data-pilot-hardening`**: Alpaca `end` kapas till gårdagens NY-datum (403-fixen, noteras i metadata), kurshopp klassas splitliknande (WARN) eller verkligt (INFO, påverkar ej status), volymkvot median/IQR i jämförelsen, `scripts/inspect_day.py`, **upsert-policy för lagring** (kort hämtning krymper aldrig lagrad serie; rådata append-only; `--replace` explicit), jämförelsen anger datumintervall, 23 regressionstester (71), DATA_PILOT v0.4 §10, D-010 (föreslagen) och D-011, Q-009/Q-010. Ej mergad.
+Datapilot klar (PR #5–#7 mergade; hardening PR #8 låg **omergad** på GitHub när denna gren skapades – grenen `feat/scanner-features` utgår därför från `feat/data-pilot-hardening`). **Scanner steg 1 på grenen `feat/scanner-features`**: `scanner/features.py` (spec §2–3, T−1-konvention, splitsäker), `scanner/pipeline.py` + `scripts/build_features.py` (Parquet + metadata), `attach_splits()` för Alpaca raw med Yahoos splitlista, 11 tester (82 totalt), `docs/SCANNER.md`. Ej mergad.
 
 ## Senaste beslut
 D-008 kapital, D-009 riskmodell, D-011 Alpaca som pilotens as-traded-källa. D-010 (volymkälla) föreslagen, ej godkänd.
 
 ## Pågående uppgift
-Granskning och merge av PR `feat/data-pilot-hardening`. Efter merge: återställ full Alpaca-historik (`ingest.py --source alpaca --tickers AAPL MSFT NVDA --start 2000-01-01`), verifiera att en kort hämtning därefter inte krymper serien. MSFT 2020-03-18 och volymdefinitionen (DATA_PILOT §10) är dokumenterade som olösta; D-010 förblir föreslagen.
+Merge av PR #8 (hardening) och därefter PR `feat/scanner-features`. Sedan: projektägaren kör `build_features.py` på yahoo och alpaca (`--splits-from yahoo`) och granskar featurerader runt kända formationer.
 
 ## Nästa steg
-1. Merge; återställ Alpaca-historik; Q-009 (volymdefinitioner) och MSFT-dagen utreds mot primärkällor (Nasdaq, Alpacas dokumentation) innan D-010 avgörs.
-2. Fas 5-start, avgränsat: regelbaserad scanner steg 1 = features (ADR20, SMA10/20/50, prior move, konsolideringsmått enligt spec §2–3) på lagrade Alpaca-serier, med look-ahead-tester (spec §11.2). Ingen trigger, ingen backtest.
-3. Point-in-time-universum: olöst, blockerar trovärdiga resultat (se handoff-svar 2026-10-26). Fas 1 (ChatGPT) Q-002 inriktas på noteringslistor med datum.
-4. Beslut om spec §12-nivåer före fas 6. Fas 3: dataset V0.2 enligt D-006.
+1. Merge #8 och scanner-PR:en; kör `build_features.py`; jämför features yahoo vs alpaca (ska vara identiska upp till prisavvikelserna i DATA_PILOT §10).
+2. Scanner steg 2: setup-detektion med spec-trösklar → kandidattabell med `candidate_id`; kalibrering av P-002 mot handplockade exempel.
+3. Point-in-time-universum (Q-002) är fortsatt blockerande för trovärdiga resultat. Fas 1 (ChatGPT).
+4. Q-009 (volymdefinitioner), MSFT 2020-03-18, D-010 – olösta. Beslut om spec §12-nivåer före fas 6.
 
 ## Öppna frågor
 Q-001–Q-010 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmatris i `RISK_MODEL.md` §3.
@@ -25,3 +25,4 @@ Q-001–Q-010 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmat
 - Riskgranskning: `RISK_MODEL.md`.
 - Fas 1: `DECISIONS.md`.
 - Datapilot: `DATA_PILOT.md` och utdata från lokala körningar.
+- Scanner: `SCANNER.md`, `STRATEGY_SPEC.md` §2–4.
