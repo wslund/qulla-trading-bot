@@ -131,6 +131,8 @@ Fylls i av projektägaren efter lokala körningar (nätverk saknas i Claudes mil
 | 2026-10-26 | `inspect_day.py --ticker MSFT --date 2020-03-18` | se §10.1 |
 | 2026-10-26 | `compare_sources.py --a yahoo --b alpaca ... --basis as_traded` | MSFT volB/volA median 1,096, IQR [1,002, 1,130]; NVDA 1,035, IQR [1,003, 1,053]; se §10.2 |
 | | `ingest.py --source alpaca --tickers AAPL MSFT NVDA --start 2000-01-01` (återställ full historik efter överskrivningen) | |
+| 2026-10-27 | Alpaca minutdata (direkta anrop): AAPL 2020-08-28, 2020-08-31, NVDA 2017-01-10, AAPL 2024-11-29 | 391/391/391/325 staplar; första 13:30Z (EDT) resp. 14:30Z (EST); as-traded över splitten (504 → 127,6); halvdag innehåller staplar t.o.m. 21:00Z → sessionsfilter krävs; `next_page_token = null`. Se STEP3_DESIGN §9 |
+| | Minutdata: historikstart (2016-01-04?), rate limit-headrar, SIVB med `asof`, frekvens av sena korrigeringar | öppet |
 | | Läs Alpacas villkor för kontotypen; notera rate limit ur `X-RateLimit-*` | |
 
 ## 10. Pågående undersökningar
