@@ -146,7 +146,12 @@ Resultat mellan kolumnerna är "oklart" och kräver ett nytt beslut, inte fler p
 Utan stöd i källan; värden ovan är startförslag.
 
 - P-001 `min_dollar_volume`, `min_price` (§1)
-- P-002 `tightness_ratio`, `max_consol_depth`, `max_pct_below_high`, `max_closes_below_sma20` (§3) – kalibreras mot handplockade historiska exempel i fas 5
+- P-002 `tightness_ratio`, `max_consol_depth`, `max_pct_below_high`, `max_closes_below_sma20` (§3) – kalibreras mot handplockade historiska exempel i fas 5. Hypoteser från visuell granskning av 15 NVDA-diagram 2026-10-27 (ett bolag, tre kandidatdagar – inget är bevisat, inga trösklar ändrade):
+  - `[H]` P-002a: `max_pct_below_high = 0.10` kan vara för generöst. NVDA 2017-06-27 klarade 9/9 vid 9,7 % under toppen och såg kortsiktigt svag ut. Att testa: 0,05–0,07, eller ett kompletterande krav på korttidsmomentum (close över SMA10, positiv 5-dagarsförändring) – båda finns nu som diagnostiska mått i setup-bilderna.
+  - `[H]` P-002b: `max_closes_below_sma20 = 3` kan vara för strängt. NVDA jan–feb 2017 fälldes på detta trots stark föregående uppgång. Att testa: 5, eller att räkna andelen av fönstret i stället för antal (längre fönster tillåts fler).
+  - `[H]` P-002c: `prior_move_window = 63` med krav på 30 % kan missa konsolideringar efter en uppgång som ligger strax utanför fönstret (NVDA okt 2017, juni 2018). Att testa: 90 dagar, eller att mäta uppgången från fönstrets lägsta i stället för lägsta *före* toppen. Risk: fler falska kandidater.
+  - `[H]` P-002d: samma formation ger kandidater flera dagar i rad (NVDA 2016-08-31 och 09-01). Det är inte en tröskelfråga utan hör till §4: en kandidat per konsolidering (nu synlig som `setup_group_id`).
+  - Kalibrering kräver fler bolag än tre megacaps; se SCANNER.md §9.
 - P-003 `vol_mult` och om volymfilter ska användas alls (§4)
 - P-004 `max_gap_entry`, `slippage_bps`, `latest_entry_time` (§5, §10)
 - P-005 riskparametrar (§7) – testas enligt `RISK_MODEL.md` §3

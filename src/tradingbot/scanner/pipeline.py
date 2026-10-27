@@ -124,8 +124,11 @@ def build_candidates(
             f"{source}/{ticker}: feature table version {fmeta.get('feature_version')} != "
             f"{FEATURE_VERSION}; rebuild features"
         )
-    cands = apply_rules(feats, th)
+    from tradingbot.scanner.diagnostics import DIAGNOSTICS_VERSION, add_group_diagnostics
+
+    cands = add_group_diagnostics(apply_rules(feats, th))
     summary = RuleSummary.of(cands)
+    groups = cands.loc[cands["is_candidate"].astype(bool), "setup_group_id"].nunique()
     meta = {
         "source": source,
         "ticker": ticker.upper(),
@@ -141,6 +144,8 @@ def build_candidates(
         "rule_tags": RULE_TAGS,
         "rows": summary.rows,
         "candidates": summary.candidates,
+        "setup_groups": int(groups),
+        "diagnostics_version": DIAGNOSTICS_VERSION,
         "pass_rate_by_rule": summary.pass_rate_by_rule,
         "built_at": (built_at or datetime.now(UTC)).isoformat(),
         "disclaimer": fmeta.get("disclaimer"),
