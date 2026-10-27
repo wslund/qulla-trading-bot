@@ -20,6 +20,7 @@ import pandas as pd
 
 from tradingbot.data.compare import rebase
 from tradingbot.data.schema import AS_TRADED, SPLIT_ADJUSTED
+from tradingbot.scanner.diagnostics import extra_measures, prior_move_detail
 from tradingbot.scanner.rules import RULE_NAMES
 
 FEATURE_LINES = [
@@ -55,6 +56,12 @@ class PlotInfo:
     rules_total: int
     is_candidate: bool
     path: Path
+    prior_move_start: date | None = None
+    prior_move_pct_recomputed: float | None = None
+    prior_move_consistent: bool = True
+    close_vs_sma10: float | None = None
+    ret_5d: float | None = None
+    group_id: str | None = None
 
 
 def _series_for_chart(series: pd.DataFrame) -> pd.DataFrame:
@@ -143,6 +150,22 @@ def plot_setup(
             fontsize=8,
             color="tab:purple",
         )
+    # Diagnostics (bars <= T-1 only): prior-move start -> peak, SMA10 distance, 5-bar change.
+    pm = prior_move_detail(series, row)
+    if pm.start_date is not None and pm.peak_date is not None:
+        xs = [pd.Timestamp(pm.start_date), pd.Timestamp(pm.peak_date)]
+        ax.plot(xs, [pm.start_close, pm.peak_close], color="tab:purple", lw=1, ls=":")
+        ax.plot([xs[0]], [pm.start_close], marker="^", color="tab:purple", ms=9)
+        ax.annotate(
+            f"prior move start\n{pm.start_date} @ {pm.start_close:.2f}",
+            (xs[0], pm.start_close),
+            xytext=(-8, -4),
+            textcoords="offset points",
+            ha="right",
+            fontsize=7,
+            color="tab:purple",
+        )
+    extra = extra_measures(series, row)
     ax.axvline(t, color="tab:red", lw=1.2)
     ax.annotate(
         "T (decision)",
@@ -171,7 +194,23 @@ def plot_setup(
         f"SMA10={float(row['sma10']):.2f} SMA20={float(row['sma20']):.2f} "
         f"SMA50={float(row['sma50']):.2f}"
     )
-    box = "\n".join(rule_txt) + "\n\n" + "\n".join(feat_txt)
+    diag_txt = ["-- diagnostics (not rules) --"]
+    if pm.start_date is not None:
+        flag = "" if pm.consistent else "  !! differs from stored"
+        diag_txt.append(
+            f"prior move {pm.start_date} @ {pm.start_close:.2f}\n"
+            f"  -> {pm.peak_date} @ {pm.peak_close:.2f} = {pm.pct:+.1%}{flag}"
+        )
+    else:
+        diag_txt.append(f"prior move: n/a (window from {pm.window_start})")
+    v = extra["close_vs_sma10"]
+    diag_txt.append("close vs SMA10: " + ("n/a" if v is None else f"{v:+.1%}"))
+    v = extra["ret_5d"]
+    diag_txt.append("5-bar change: " + ("n/a" if v is None else f"{v:+.1%}"))
+    gid = row.get("setup_group_id")
+    if gid is not None and not pd.isna(gid):
+        diag_txt.append(f"setup group: day {int(row['group_rank'])} of {int(row['group_size'])}")
+    box = "\n".join(rule_txt) + "\n\n" + "\n".join(feat_txt) + "\n\n" + "\n".join(diag_txt)
     ax.text(
         1.01,
         1.0,
@@ -218,6 +257,12 @@ def plot_setup(
         rules_total=total,
         is_candidate=is_cand,
         path=out_path,
+        prior_move_start=pm.start_date,
+        prior_move_pct_recomputed=pm.pct,
+        prior_move_consistent=pm.consistent,
+        close_vs_sma10=extra["close_vs_sma10"],
+        ret_5d=extra["ret_5d"],
+        group_id=None if gid is None or pd.isna(gid) else str(gid),
     )
 
 

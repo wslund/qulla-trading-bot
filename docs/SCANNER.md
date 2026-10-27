@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 2 + visuell validering, 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 2 + visuell validering med diagnostik, 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -82,7 +82,14 @@ Regler för vad bilden får visa:
 - Diagrammet ritas på splitjusterade priser (kontinuerligt över splittar); `close_prev` och SMA-nivåer i rubriken är i as-traded-enheter för T−1 och skalfaktorn visas.
 - `--near-misses` tar med rader som fallerar exakt en regel; titeln anger `near miss (8/9)` och rutan visar vilken.
 
-Syfte: kvalitativ granskning av att reglerna fångar det slags formationer specen beskriver – inte utvärdering av avkastning. Bilder hamnar under `data/plots/` (git-ignorerat).
+**Diagnostik (inte regler), `scanner/diagnostics.py`:**
+- *Prior move start → topp.* Startpunkten (lägsta stängning i 63-dagarsfönstret före toppen) och toppen markeras, med den faktiskt beräknade procenten. Värdet räknas om ur serien t.o.m. T−1 med §2-definitionen och jämförs med det lagrade `prior_move_pct`; avviker de skrivs `!! differs from stored` i rutan. Fönstrets startdatum visas när prior move saknas.
+- *close vs SMA10* och *5-bar change*: korttidsmomentum vid T−1. Diagnostiska mått för hypotes P-002a; de blockerar inget.
+- *Setup-grupper.* Kandidatrader som följer på varandra i tabellen och delar `prior_move_peak_date` får samma `setup_group_id` (`TICKER:peak<datum>:from<datum>`), `group_rank` och `group_size`. Kolumnerna är additiva i kandidattabellen; regelkolumner och `is_candidate` rörs inte. `scan.py` skriver antal grupper, och kandidatmetadata får `setup_groups`. En kandidat per konsolidering är en §4-fråga (steg 3), inte filtrets.
+
+Alla diagnostiska mått använder bara staplar ≤ T−1; `tests/test_diagnostics.py` muterar T och senare och kräver oförändrade värden.
+
+Syfte: kvalitativ granskning av att reglerna fångar det slags formationer specen beskriver – inte utvärdering av avkastning. Observationer från granskningen dokumenteras som hypoteser under P-002 i `STRATEGY_SPEC.md` §13. Bilder hamnar under `data/plots/` (git-ignorerat).
 
 ## 9. Nästa steg (steg 3)
 

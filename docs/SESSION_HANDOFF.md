@@ -1,21 +1,20 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-26 (Claude, visuell setup-validering). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-10-26 (Claude, setup-diagnostik). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-Scanner steg 1–2 mergade (PR #8–#9). Första verkliga scan: AAPL 0, MSFT 0, NVDA 3 kandidatdagar (2016-08-31, 2016-09-01, 2017-06-27), identiskt i Yahoo och Alpaca. **Visuell validering på grenen `feat/setup-plots`**: `scanner/plot.py` + `scripts/plot_setup.py` (PNG per beslutsrad med fönster, topp, breakoutnivå, SMA t.o.m. T−1, regler och värden; near misses), matplotlib som extra `viz`, 5 tester (105), `SCANNER.md` §8. Ej mergad.
+Scanner steg 1–2 och setup-bilder mergade (PR #8–#10). 15 NVDA-diagram granskade. **Diagnostik på grenen `feat/setup-diagnostics`**: prior-move start/topp med omräknad procent (kontroll mot lagrat värde), close vs SMA10 och 5-dagarsförändring som diagnostiska mått, setup-grupper för återkommande kandidatdagar (additiva kolumner, regelutfall orörda), observationerna som hypoteser P-002a–d i spec §13, 8 tester (113). Ej mergad. Inga trösklar ändrade.
 
 ## Senaste beslut
 D-008 kapital, D-009 riskmodell, D-011 Alpaca som pilotens as-traded-källa. D-010 (volymkälla) föreslagen, ej godkänd.
 
 ## Pågående uppgift
-Granskning av PR `feat/setup-plots`. Efter merge: projektägaren ritar NVDA 2016-08-31 och 2017-06-27 samt near misses 2016–2018 och bedömer kvalitativt om formationerna liknar specens beskrivning (§3). Observationer → kalibrering av P-002.
+Granskning av PR `feat/setup-diagnostics`. Efter merge: kör om `scan.py` (nya kolumner) och rita NVDA-kandidaterna igen; kontrollera att diagnostiken bekräftar observationerna (2017-06-27: close vs SMA10 och 5-bar change negativa?).
 
 ## Nästa steg
-1. Merge; bilder för NVDA-kandidaterna och near misses; anteckna vilka regler som oftast fäller nästan-formationer (`scan.py --near-misses`).
-2. Kalibrering P-002 mot fler tickers (kräver bara ingest av t.ex. 10–20 kända momentumaktier 2016–2024); inga tröskeländringar utan dokumenterad motivering i DECISIONS.
-3. Steg 3: trigger (§4) + `daily_stop_entry` (§5.2), en kandidat per konsolidering. Före det: beslut om §12-nivåer.
-4. Point-in-time-universum (Q-002), Q-009, MSFT 2020-03-18, D-010 – olösta.
+1. Merge; omritning; ingest av 10–20 kända momentumaktier 2016–2024 för kalibrering av P-002a–d (hypoteser, inte beslut). Tröskeländringar bara via DECISIONS med motivering.
+2. Steg 3: trigger (§4) + `daily_stop_entry` (§5.2), en kandidat per setup-grupp. Före det: beslut om §12-nivåer.
+3. Point-in-time-universum (Q-002), Q-009, MSFT 2020-03-18, D-010 – olösta.
 
 ## Öppna frågor
 Q-001–Q-010 i `DECISIONS.md`. P-001–P-011 i `STRATEGY_SPEC.md` §13. Testmatris i `RISK_MODEL.md` §3.

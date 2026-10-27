@@ -103,7 +103,8 @@ def main() -> None:
         return
     allrows = pd.concat(frames, ignore_index=True)
     cands = allrows[allrows["is_candidate"]]
-    print(f"\n=== candidates {lo}..{hi}: {len(cands)} ===")
+    groups = cands["setup_group_id"].nunique() if "setup_group_id" in cands else "?"
+    print(f"\n=== candidates {lo}..{hi}: {len(cands)} rows in {groups} setup groups ===")
     if len(cands):
         print(cands[SHOW].to_string(index=False))
     if args.near_misses:
