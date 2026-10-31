@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 3a (ordernivåer), 2026-10-31. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 3b (setup-tillstånd), 2026-10-31. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -103,6 +103,18 @@ Syfte: kvalitativ granskning av att reglerna fångar det slags formationer spece
 
 Ingen trigger, fyllning, risk eller tillstånd här; det är 3b–3d.
 
-## 10. Nästa steg (3b–3f)
+## 10. Steg 3b – setup-tillstånd och dedupe (`signals/state.py`)
+
+`SetupRegistry` håller tillstånd per key `(ticker, prior_move_peak_date)` enligt D-014, för en hel körning över alla tickers.
+
+- `decide(row)` för en kandidat-/featurerad på dag T ger `Decision(allow_order, reason, status)`. Ordningen på avslag: `no_peak` → `not_candidate` → `key_consumed` → `position_open`; annars `armed`. ARMED är en egenskap per dag: en dag som fäller en regel ger `not_candidate` utan att något återställs, och samma key är `armed` igen nästa kandidatdag.
+- `record_fill(key, date)` förbrukar keyn permanent och öppnar tickerns position (en per ticker). `record_no_fill` loggar en utebliven trigger utan att förbruka. `record_close` stänger positionen; keyn förblir förbrukad (`CLOSED`). `record_expiry` är bara logg (`EXPIRED`) för en armerad key som aldrig fylldes.
+- Ogiltiga övergångar (fyllning på förbrukad key, fyllning utan ARMED-beslut, fyllning med öppen position, stängning utan position, expiry av förbrukad key) ger `InvalidTransition` – de är programfel uppströms, inte data.
+- Varje övergång loggas (`Transition`: datum, ticker, key, från, till, orsak); `log_frame()` ger spårbarheten som tabell. `walk_candidates(cands, fill_dates, close_dates)` spelar upp en kandidattabell med skriptade fyllningar/stängningar – för tester och torrkörning; 3c ersätter skriptet med verklig trigger-utvärdering.
+- Dedupe-nyckeln är toppen, inte `setup_group_id`: en kandidatsekvens som bryts av en underkänd dag får två grupp-id:n men en key (testat mot scannerns verkliga utdata).
+
+Tester (12): fem kandidatdagar med fyllning dag 3 → dag 4–5 `key_consumed`; utebliven trigger förbrukar inte; lucka i sekvensen behåller keyn; stoppad position blockerar samma key för alltid men inte ny key; ny topp under öppen position → `position_open` utan förbrukning, `armed` efter stängning; tre formationer under samma topp → en affär; rader utan topp; två tickers oberoende; alla ogiltiga övergångar; expiry; avslagsordning; verklig kandidattabell med bruten grupp.
+
+## 11. Nästa steg (3c–3f)
 
 Breakout-trigger enligt spec §4 (`high[T] > breakout_level`) och entry-modellen `daily_stop_entry` (§5.2), med en kandidat per konsolidering. Kräver beslut om §12-nivåer före första backtest och ett point-in-time-universum (Q-002) för trovärdiga resultat. Kalibrering av P-002: välj 10–20 handplockade historiska formationer och kontrollera att de blir kandidater; justera trösklar med dokumenterad motivering.
