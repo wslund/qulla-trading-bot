@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 2 + visuell validering med diagnostik, 2026-10-27. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 3a (ordernivåer), 2026-10-31. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -91,6 +91,18 @@ Alla diagnostiska mått använder bara staplar ≤ T−1; `tests/test_diagnostic
 
 Syfte: kvalitativ granskning av att reglerna fångar det slags formationer specen beskriver – inte utvärdering av avkastning. Observationer från granskningen dokumenteras som hypoteser under P-002 i `STRATEGY_SPEC.md` §13. Bilder hamnar under `data/plots/` (git-ignorerat).
 
-## 9. Nästa steg (steg 3)
+## 9. Steg 3a – ordernivåer (`scanner/levels.py`)
+
+`compute_levels(series, row)` ger en frusen `OrderLevels` per beslutsrad: `breakout_level_at` (högsta `high` i fönstret (topp, T−1]), `low_prev_at` (`low[T−1]`), `adr20`, fönsterdatum, `split_ratio_on_t`, `split_on_entry_day`, `units="as_traded"`. Regler (STEP3_DESIGN §2, D-013/D-014):
+
+- Bara staplar ≤ T−1 används för priser. Serien skärs vid `asof_date` och rebasas; eftersom inga senare splittar finns i den skurna serien blir värdena automatiskt i T−1:s aktieenheter – en split *inuti* fönstret hanteras utan separat skalfaktor (test: 2:1 fem dagar före T ger osplittad nivå / 2, medan naivt max över råa as-traded-high hade blivit fel).
+- Split med ex-dag T delar alla nivåer med `split_ratio[T]` och sätter `split_on_entry_day` – antagandet att ex-dagen var känd före öppning kan inte verifieras ur data och flaggas därför. Split på T+1 påverkar inte T.
+- Vägrar `price_basis ≠ as_traded`, NaN i `split_ratio`, saknad topp, tom fönster eller saknad T−1-stapel. `plot.py` importerar inte modulen; diagrammets splitjusterade nivåer kan inte bli ordernivåer.
+- Operatorer (D-013): `breakout_triggered(high, level)` = `high > level` (tangering räknas inte), `stop_hit(low, stop)` = `low ≤ stop`, `gap_exceeds(open, level, max_gap)` = `open > level × (1 + max_gap)` (exakt gränsen tillåten). Gränsvärdestestade.
+- `compute_levels_table(series, candidates)` ger en rad per kandidatrad med `levels_error` där nivåer saknas (de första ~63 raderna). Ingen lagring i v1 – nivåerna är billiga och deterministiska och beräknas i signalsteget.
+
+Ingen trigger, fyllning, risk eller tillstånd här; det är 3b–3d.
+
+## 10. Nästa steg (3b–3f)
 
 Breakout-trigger enligt spec §4 (`high[T] > breakout_level`) och entry-modellen `daily_stop_entry` (§5.2), med en kandidat per konsolidering. Kräver beslut om §12-nivåer före första backtest och ett point-in-time-universum (Q-002) för trovärdiga resultat. Kalibrering av P-002: välj 10–20 handplockade historiska formationer och kontrollera att de blir kandidater; justera trösklar med dokumenterad motivering.
