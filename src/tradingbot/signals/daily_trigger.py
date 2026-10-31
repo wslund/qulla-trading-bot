@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date
+from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -153,7 +154,26 @@ def evaluate_day(signal: Signal, open_: float, high: float, low: float) -> Trigg
 
 # --- integration with the registry / 3d -----------------------------------------------------------
 
-Approver = Callable[[TriggerOutcome], tuple[bool, str]]
+
+class Approval(Protocol):
+    """What an approver may return instead of a bare ``(approved, reason)`` tuple (3d's
+    ``RiskDecision``): the same two fields plus optional extra trace columns."""
+
+    approved: bool
+    reason: str
+
+    def trace(self) -> dict[str, object]: ...
+
+
+Approver = Callable[[TriggerOutcome], tuple[bool, str] | Approval]
+
+
+def as_approval(result: tuple[bool, str] | Approval) -> tuple[bool, str, dict[str, object]]:
+    """Normalize an approver result; a tuple carries no trace columns."""
+    if isinstance(result, tuple):
+        approved, reason = result
+        return bool(approved), str(reason), {}
+    return bool(result.approved), str(result.reason), dict(result.trace())
 
 
 def approve_and_record(
@@ -179,7 +199,8 @@ def approve_and_record(
 
 
 def pending_risk_approval(_: TriggerOutcome) -> tuple[bool, str]:
-    """Default approver until 3d exists: nothing is approved, keys are never consumed."""
+    """Default approver when no RiskApprover (3d) is passed: nothing is approved, keys are
+    never consumed."""
     return False, "pending_risk_approval"
 
 
@@ -251,7 +272,11 @@ def walk_daily(
                     continue
                 bar = bars.loc[d]
                 out = evaluate_day(sig, float(bar["open"]), float(bar["high"]), float(bar["low"]))
-                approved, why = approver(out) if out.code == FILL_CANDIDATE else (False, out.code)
+                extra: dict[str, object] = {}
+                if out.code == FILL_CANDIDATE:
+                    approved, why, extra = as_approval(approver(out))
+                else:
+                    approved, why = False, out.code
                 final = approve_and_record(reg, out, approved, why)
                 rec.update(
                     outcome=out.code,
@@ -259,6 +284,7 @@ def walk_daily(
                     level=sig.breakout_level,
                     split_on_entry_day=sig.split_on_entry_day,
                     detail=out.detail,
+                    **extra,
                 )
                 if out.fill:
                     rec.update(
