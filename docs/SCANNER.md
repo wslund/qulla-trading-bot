@@ -1,6 +1,6 @@
 # SCANNER – regelbaserad scanner
 
-**Version:** steg 3b (setup-tillstånd), 2026-10-31. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
+**Version:** steg 3c (dagsmodellens trigger), 2026-10-31. Följer `STRATEGY_SPEC.md` v0.2.1 §2–3. Ingen trigger, inga utfall, ingen positionslogik.
 
 > Features beräknade på tre–fyra överlevande tickers är ett tekniskt funktionstest. Point-in-time-universum saknas (DATA_PILOT §6); inget här är bevis för strategins lönsamhet.
 
@@ -115,6 +115,22 @@ Ingen trigger, fyllning, risk eller tillstånd här; det är 3b–3d.
 
 Tester (12): fem kandidatdagar med fyllning dag 3 → dag 4–5 `key_consumed`; utebliven trigger förbrukar inte; lucka i sekvensen behåller keyn; stoppad position blockerar samma key för alltid men inte ny key; ny topp under öppen position → `position_open` utan förbrukning, `armed` efter stängning; tre formationer under samma topp → en affär; rader utan topp; två tickers oberoende; alla ogiltiga övergångar; expiry; avslagsordning; verklig kandidattabell med bruten grupp.
 
-## 11. Nästa steg (3c–3f)
+## 11. Steg 3c – `daily_stop_entry` (`signals/daily_trigger.py`)
+
+Spec §5.2/§6 och D-013 som kod, med tre skilda objekt:
+
+- **`Signal`** – känt före öppning dag T: key, `breakout_level`, `low_prev`, `adr20`, `split_on_entry_day` (allt från `compute_levels`, dvs. staplar ≤ T−1) och `TriggerParams` (`max_gap_entry` 0,05, `slippage_bps` 10 som **scenario**, `min_stop_pct` 0,01). Byggs bara från ett `armed`-beslut i registret.
+- **`evaluate_day(signal, open, high, low)`** → `TriggerOutcome` med kod `gap_too_large` (`open > level × 1,05`), `no_trigger` (`high ≤ level`), `stop_invalid` (`stop ≥ fill` eller avstånd < `min_stop_pct`) eller `fill_candidate`. Funktionen får bara T:s open/high/low; inget annat finns att läsa.
+- **`FillCandidate`** – antagen fyllning, status `PRELIMINARY`: `fill = (open om open > level annars level) × (1 + slip)` med `gap_fill`-flagga; `stop = max(low_prev, fill × (1 − adr20))`; `ambiguous_same_day = low[T] ≤ stop` med konservativt stopp-pris `stop × (1 − slip)`.
+- **`approve_and_record(registry, outcome, approved, reason)`** är enda vägen till `record_fill`. Godkännandet kommer från 3d (risk/sizing) – tills dess är default-godkännaren `pending_risk_approval`, som aldrig godkänner: fyllningskandidater loggas som `pending_risk_approval` och **förbrukar inte keyn**. `approve_all_for_tests` är en uttrycklig teststubb. Icke-fyllningar (`no_trigger`, `gap_too_large`, `stop_invalid`) loggas via `record_no_fill` oavsett godkännande. En godkänd fyllning med `ambiguous_same_day` stängs samma dag i registret (`filled_stopped_same_day`) – den enda exit som modelleras här.
+- **`walk_daily(series, cands, params, approver, close_dates)`** spelar upp en ticker dag för dag: skriptade stängningar först (exit-order fylls vid öppningen, §6.1), därefter beslut → nivåer → trigger → godkännande. Ger en spårbar tabell per kandidatrad (beslut, utfall, slutkod, nivå, fyllning, stop, flaggor).
+
+**Inte i 3c:** exits efter entrydagen (stop-gap med förlust > 1R, delvinst, trailing) – 3f; positionsstorlek, kostnader och acceptans på antagen fyllning – 3d; ORB – 3e.
+
+Observation från den syntetiska formationen: i en stigande konsolidering överskrids fönstrets högsta nästan varje dag, så första kandidatdagen triggar direkt. Det är en egenskap hos "högsta high i fönstret" som nivå, värd att titta på i verkliga kandidater (3f-rapporten visar hur många dagar efter första kandidatdagen fyllningen sker).
+
+Tester (20, totalt 161): operatorer och gränser, fyllning vid nivå/öppning, ADR-tak på stoppen, för snäv stop, samma-dagsstopp flaggad och prissatt, fyllningskandidat förbrukar aldrig key utan godkännande, no_trigger/gap förbrukar inte, godkänd fyllning förbrukar och öppnar position, tvetydig godkänd fyllning stängs, godkännande utan ARMED är ogiltigt, `walk_daily` default/stubb/gap/krasch, mutation av framtida staplar och split efter T, split på T skalar nivå/fyllning/stop.
+
+## 12. Nästa steg (3d–3f)
 
 Breakout-trigger enligt spec §4 (`high[T] > breakout_level`) och entry-modellen `daily_stop_entry` (§5.2), med en kandidat per konsolidering. Kräver beslut om §12-nivåer före första backtest och ett point-in-time-universum (Q-002) för trovärdiga resultat. Kalibrering av P-002: välj 10–20 handplockade historiska formationer och kontrollera att de blir kandidater; justera trösklar med dokumenterad motivering.
