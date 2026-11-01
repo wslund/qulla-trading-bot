@@ -252,6 +252,16 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
             "by_ticker": stale_by_ticker,
             "note": "öppen position utan dagsstapel: värderad till senast kända kurs",
         },
+        "entry_model": result.params.entry_model,
+        "candidates": {
+            **result.candidate_stats,
+            "days_with_reservable_candidates": int(len(day_rows)),
+            "note": "candidate_rows = rader med is_candidate; candidate_days_distinct = "
+            "sessioner med minst en sådan rad; days_with_reservable_candidates = sessioner "
+            "där minst en rad passerade registret och nivåerna (key_consumed, position_open, "
+            "no_peak och levels_unavailable räknas inte)",
+        },
+        "orb": result.summary()["orb"],
         "versions": {
             **result.summary()["versions"],
             "portfolio_version": result.summary()["portfolio"]["portfolio_version"],
@@ -343,6 +353,7 @@ def render_text(summary: dict) -> str:
         summary["utilization"],
     )
     k, rj, st = summary["costs_usd"], summary["rejections"], summary["stale_marks"]
+    cd = summary["candidates"]
     r = perf["realistic"]
     a = perf["all_trades"]
     f = _fmt
@@ -379,7 +390,20 @@ def render_text(summary: dict) -> str:
         f"Förlustlägen {lim['loss_state_sessions']}; slutläge {lim['final_state']} "
         f"halted_on={lim['halted_on']}",
         f"Gamla kurser (position utan dagsstapel): {st['sessions']} sessioner {st['by_ticker']}",
+        f"Kandidater: {cd['candidate_rows']} rader på {cd['candidate_days_distinct']} sessioner, "
+        f"{cd['days_with_reservable_candidates']} dagar med reserverbar kandidat, "
+        f"{cd['rows_off_calendar']} rader utanför kalendern",
     ]
+    if summary.get("entry_model") == "orb":
+        o = summary["orb"]
+        lines.append(f"ORB: {o['attempts']} försök, utfall {o.get('outcomes', {})}")
+        for k, v in sorted(o.get("by_ticker_year", {}).items()):
+            lines.append(
+                f"  {k}: försök {v['attempts']}, orb_incomplete {v['orb_incomplete']} "
+                f"({v['orb_incomplete_ratio']:.0%}), no_minute_bars {v['no_minute_bars']}, "
+                f"lapsed {v['lapsed']}, fill {v['fill_candidate']}, "
+                f"open_mismatch {v['open_mismatch']}"
+            )
     return "\n".join(lines)
 
 

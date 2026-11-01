@@ -2,6 +2,8 @@
 
 uv run python scripts/run_portfolio.py --source alpaca --splits-from yahoo --tickers AAPL MSFT NVDA
 uv run python scripts/run_portfolio.py --source alpaca --splits-from yahoo --tickers AAPL MSFT \\
+    --entry-model orb                      # minute bars from scripts/fetch_minute.py
+uv run python scripts/run_portfolio.py --source alpaca --splits-from yahoo --tickers AAPL MSFT \\
     --equity-sek 200000 --risk 0.01 --slippage 20 --commission fixed --fx-mode usd_balance \\
     --max-open-positions 6 --priority seeded_random --seed 7
 
@@ -22,6 +24,7 @@ from tradingbot.backtesting.portfolio import PortfolioParams, run_portfolio
 from tradingbot.backtesting.priority import PriorityParams
 from tradingbot.backtesting.report import render_text, write_run
 from tradingbot.backtesting.trades import ExitParams
+from tradingbot.data.intraday import IntradayStore
 from tradingbot.data.store import ParquetStore
 from tradingbot.risk.costs import IBKR_FIXED, IBKR_TIERED, CostParams
 from tradingbot.risk.limits import LimitParams
@@ -29,6 +32,7 @@ from tradingbot.risk.sizing import RiskParams
 from tradingbot.scanner.features import attach_splits
 from tradingbot.scanner.pipeline import build_candidates, read_candidates
 from tradingbot.signals.daily_trigger import TriggerParams
+from tradingbot.signals.orb import OrbParams
 
 
 def load_universe(store: ParquetStore, source: str, tickers: list[str], splits_from: str | None):
@@ -70,6 +74,13 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument(
         "--seed", type=int, default=None, help="required for seeded_random (pre-registered)"
     )
+    ap.add_argument(
+        "--entry-model",
+        choices=["daily", "orb"],
+        default="daily",
+        help="orb needs minute bars from scripts/fetch_minute.py (latest fetch per day)",
+    )
+    ap.add_argument("--orb-minutes", type=int, default=5)
     ap.add_argument("--run-id", default=None, help="default: UTC timestamp + config hash")
     ap.add_argument("--data-dir", type=Path, default=Path("data"))
     args = ap.parse_args(argv)
@@ -89,10 +100,13 @@ def main(argv: list[str] | None = None) -> Path:
         trigger=TriggerParams(slippage_bps=args.slippage),
         exits=ExitParams(),
         priority=PriorityParams(args.priority, seed=args.seed),
+        entry_model=args.entry_model,
+        orb=OrbParams(orb_minutes=args.orb_minutes),
     )
     store = ParquetStore(args.data_dir)
     series, cands = load_universe(store, args.source, args.tickers, args.splits_from)
-    result = run_portfolio(series, cands, params)
+    loader = IntradayStore(args.data_dir).read_latest if args.entry_model == "orb" else None
+    result = run_portfolio(series, cands, params, minute_bars=loader)
     out = write_run(
         result, args.data_dir / "portfolio" / args.source, run_id=args.run_id, args=vars(args)
     )

@@ -28,6 +28,7 @@ Only ``daily_stop_entry`` here; ORB is P5.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any
@@ -58,6 +59,7 @@ from tradingbot.backtesting.trades import (
     summarize,
 )
 from tradingbot.backtesting.trades import apply_split as split_position
+from tradingbot.data.intraday import session_bars, session_bounds
 from tradingbot.risk.costs import CostParams
 from tradingbot.risk.limits import LimitParams, LossState
 from tradingbot.risk.sizing import APPROVED, INSUFFICIENT_CAPITAL, RiskParams, assess_fill
@@ -71,9 +73,13 @@ from tradingbot.signals.daily_trigger import (
     build_signal,
     evaluate_day,
 )
+from tradingbot.signals.orb import NO_MINUTE_BARS, STOP_INTRADAY, OrbParams, simulate_orb_day
 from tradingbot.signals.state import Reason, SetupRegistry
 
-PORTFOLIO_VERSION = "1"
+PORTFOLIO_VERSION = "2"  # 2: entry_model daily|orb (P5), candidate-day diagnostics
+DAILY = "daily"
+ORB = "orb"
+MinuteBarsLoader = Callable[[str, date], "pd.DataFrame | None"]
 FEATURE_COLUMNS_FOR_PRIORITY = ("consol_pct_below_high", "consol_tightness", "prior_move_pct")
 
 
@@ -86,6 +92,12 @@ class PortfolioParams:
     trigger: TriggerParams = field(default_factory=TriggerParams)
     exits: ExitParams = field(default_factory=ExitParams)
     priority: PriorityParams = field(default_factory=PriorityParams)
+    entry_model: str = DAILY  # "daily" (default, unchanged) or "orb" (P5; needs minute_bars)
+    orb: OrbParams = field(default_factory=OrbParams)
+
+    def __post_init__(self) -> None:
+        if self.entry_model not in (DAILY, ORB):
+            raise ValueError(f"entry_model must be {DAILY!r} or {ORB!r}")
 
 
 @dataclass
@@ -115,6 +127,8 @@ class PortfolioResult:
     registry: SetupRegistry
     params: PortfolioParams
     events: list[dict] = field(default_factory=list)  # non-bookkeeping notes (no_bar, …)
+    candidate_stats: dict[str, Any] = field(default_factory=dict)  # input candidate rows/days
+    orb_attempts: list[dict] = field(default_factory=list)  # one row per reserved ORB order
 
     def ledger_frame(self) -> pd.DataFrame:
         return self.account.ledger.rows_frame()
@@ -158,7 +172,10 @@ class PortfolioResult:
                 )
             ),
             "portfolio_version": PORTFOLIO_VERSION,
+            "entry_model": self.params.entry_model,
+            "candidates": self.candidate_stats,
         }
+        s["orb"] = orb_stats(self.orb_attempts)
         return s
 
 
@@ -168,16 +185,24 @@ def run_portfolio(
     params: PortfolioParams | None = None,
     *,
     registry: SetupRegistry | None = None,
+    minute_bars: MinuteBarsLoader | None = None,
 ) -> PortfolioResult:
     """Replay all tickers through one account. ``series``/``cands`` map ticker -> frames as
-    produced by the data layer and the scanner (as-traded, with split_ratio)."""
+    produced by the data layer and the scanner (as-traded, with split_ratio).
+
+    ``entry_model="orb"`` (P5) needs ``minute_bars(ticker, date)`` returning the session's
+    minute bars (with ``in_session``) or None. The reservation in PRE_OPEN is still made on
+    the daily plan (D-016); at 09:35 ET the ORB plan sizes the order within it."""
     p = params or PortfolioParams()
+    if p.entry_model == ORB and minute_bars is None:
+        raise ValueError("entry_model='orb' needs a minute_bars loader")
     reg = registry or SetupRegistry()
     tickers = sorted(series)
     data = {t: _TickerData(series[t], cands.get(t)) for t in tickers}
     start = min(d.dates[0] for d in data.values())
     end = max(d.dates[-1] for d in data.values())
     clock = SessionClock(start, end)
+    cand_stats = _candidate_stats(cands, clock)
     prev_date = start - pd.Timedelta(days=1)  # "close before the first session"
     prev_date = prev_date.date() if hasattr(prev_date, "date") else prev_date
     account = Account.from_sek(p.equity_start_sek, p.costs, start)
@@ -193,6 +218,7 @@ def run_portfolio(
     events: list[dict] = []
     loss_states: list[LossState] = [loss]
     pending_stops: dict[tuple, float] = {}
+    orb_attempts: list[dict] = []
     slip = p.trigger.slippage_bps / 10_000
 
     for session in clock:
@@ -322,7 +348,30 @@ def run_portfolio(
                 approve_and_record(reg, _no_bar_outcome(sig), False, "no_bar")
                 rejections.append(Rejection(t, T, sig.key[1], "trigger", "no_bar"))
                 continue
-            out = evaluate_day(sig, bar.open, bar.high, bar.low)
+            if p.entry_model == DAILY:
+                out = evaluate_day(sig, bar.open, bar.high, bar.low)
+            else:
+                mb = minute_bars(t, T)
+                if mb is None or len(mb) == 0:
+                    reg.record_no_fill(sig.key, T, NO_MINUTE_BARS)
+                    rejections.append(Rejection(t, T, sig.key[1], "intraday", NO_MINUTE_BARS))
+                    orb_attempts.append({"date": T, "ticker": t, "outcome": NO_MINUTE_BARS})
+                    continue
+                so, sc = session_bounds(T)
+                bars = session_bars(mb) if "in_session" in mb.columns else mb
+                out = simulate_orb_day(sig, bars, so, sc, p.orb)
+                orb_attempts.append(
+                    {
+                        "date": T,
+                        "ticker": t,
+                        "outcome": out.code,
+                        "bars_seen": out.bars_seen,
+                        "open_mismatch": bool(
+                            not pd.isna(out.first_open)
+                            and abs(out.first_open / bar.open - 1) > p.orb.open_mismatch_tol
+                        ),
+                    }
+                )
             if out.code != FILL_CANDIDATE:
                 approve_and_record(reg, out, False, out.code)
                 rejections.append(Rejection(t, T, sig.key[1], "trigger", out.code))
@@ -335,7 +384,10 @@ def run_portfolio(
                 account.fx_mode,
                 account.deposit_fx_cost_usd,
             )
-            d = assess_fill(out, sizing_acct, p.risk, p.costs, od.plan.plan)
+            # Daily: the plan the reservation was made on. ORB: the plan from the completed
+            # opening range (trigger, orb_low), sized within the daily reservation (D-016).
+            plan = od.plan.plan if p.entry_model == DAILY else out.plan
+            d = assess_fill(out, sizing_acct, p.risk, p.costs, plan)
             reason = d.reason
             if not d.approved and reason == INSUFFICIENT_CAPITAL:
                 reason = classify_overrun(account, sig.key, d.capital_required) or reason
@@ -358,7 +410,7 @@ def run_portfolio(
                 approve_and_record(reg, out, False, reason)
                 rejections.append(Rejection(t, T, sig.key[1], "risk", reason))
                 continue
-            if d.shares_ordered != od.plan.shares_ordered:
+            if p.entry_model == DAILY and d.shares_ordered != od.plan.shares_ordered:
                 raise RuntimeError(
                     f"{t} {T}: sized {d.shares_ordered} but reserved {od.plan.shares_ordered}"
                 )
@@ -389,6 +441,12 @@ def run_portfolio(
                 pos.closed, pos.exit_reason, pos.exit_date = True, AMBIGUOUS_SAME_DAY, T
                 _sync_legs(o, account, Phase.INTRADAY)
                 _close(o, t, T, None, account, trades, p.costs, open_pos)  # registry closed by 3c
+            elif getattr(out, "stopped_intraday", False):
+                # ORB: unambiguous stop in a later minute bar on the entry day (3e).
+                _sell(pos, T, "exit", pos.shares, float(out.stop_ref), slip, p.costs)
+                pos.closed, pos.exit_reason, pos.exit_date = True, STOP_INTRADAY, T
+                _sync_legs(o, account, Phase.INTRADAY)
+                _close(o, t, T, reg, account, trades, p.costs, open_pos)
 
         # ---------------- CLOSE ----------------
         for t in sorted(open_pos):
@@ -438,7 +496,17 @@ def run_portfolio(
             )
         )
     return PortfolioResult(
-        trades, rejections, res_rows, dec_rows, loss_states, account, reg, p, events
+        trades,
+        rejections,
+        res_rows,
+        dec_rows,
+        loss_states,
+        account,
+        reg,
+        p,
+        events,
+        cand_stats,
+        orb_attempts,
     )
 
 
@@ -521,6 +589,49 @@ def _no_bar_outcome(sig):
     from tradingbot.signals.daily_trigger import TriggerOutcome
 
     return TriggerOutcome(sig, "no_bar", detail="no daily bar on T")
+
+
+def _candidate_stats(cands: dict[str, pd.DataFrame], clock: SessionClock) -> dict[str, Any]:
+    """How many candidate rows the input holds, on how many distinct sessions, and how many
+    rows fall on dates the XNYS clock does not know (never evaluated)."""
+    rows = 0
+    dates: set[date] = set()
+    off = 0
+    for c in cands.values():
+        if c is None or len(c) == 0:
+            continue
+        sub = c[c["is_candidate"].astype(bool)]
+        rows += int(len(sub))
+        for d in sub["date"]:
+            dd = pd.Timestamp(d).date()
+            if clock.is_session(dd):
+                dates.add(dd)
+            else:
+                off += 1
+    return {"candidate_rows": rows, "candidate_days_distinct": len(dates), "rows_off_calendar": off}
+
+
+def orb_stats(attempts: list[dict]) -> dict[str, Any]:
+    """orb_incomplete / no_minute_bars / lapsed / fill ratios per ticker and year."""
+    if not attempts:
+        return {"attempts": 0, "by_ticker_year": {}}
+    df = pd.DataFrame(attempts)
+    df["year"] = [d.year for d in df["date"]]
+    out: dict[str, Any] = {"attempts": int(len(df)), "outcomes": {}, "by_ticker_year": {}}
+    out["outcomes"] = {str(k): int(v) for k, v in df["outcome"].value_counts().items()}
+    for (t, y), g in df.groupby(["ticker", "year"]):
+        n = len(g)
+        inc = int((g["outcome"] == "orb_incomplete").sum())
+        out["by_ticker_year"][f"{t}:{y}"] = {
+            "attempts": int(n),
+            "orb_incomplete": inc,
+            "orb_incomplete_ratio": inc / n,
+            "no_minute_bars": int((g["outcome"] == NO_MINUTE_BARS).sum()),
+            "lapsed": int((g["outcome"] == "lapsed").sum()),
+            "fill_candidate": int((g["outcome"] == FILL_CANDIDATE).sum()),
+            "open_mismatch": int(g.get("open_mismatch", pd.Series(dtype=bool)).fillna(False).sum()),
+        }
+    return out
 
 
 def rejections_frame(result: PortfolioResult) -> pd.DataFrame:
