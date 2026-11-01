@@ -1,9 +1,9 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-11-01 (Claude, portfölj P3). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-11-01 (Claude, portfölj P4). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. PORTFOLIO_DESIGN v0.2 mergad (PR #21). P1–P2 mergade (PR #22–#23). **Gren `feat/portfolio-p3-reservations`**: D-015–D-017 i DECISIONS.md; `backtesting/priority.py` (baslinje ticker, frö, forskningshypotes), `backtesting/reservations.py` (plan via 3d, P2-gränser, reservation i P1-kontot, `classify_overrun`, `release_unfilled`); `apply_split` rör inte reservationer; 11 tester (267).
+3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. PORTFOLIO_DESIGN v0.2 mergad (PR #21). P1–P3 mergade (PR #22–#24). **Gren `feat/portfolio-p4-engine`**: `backtesting/portfolio.py` (`run_portfolio`, fasloop, ett konto, P2/P3 kopplade, 3f-exits fasdelade via `step_position(phase=…)`, `LossState` vid stängning, ledgerrad per session, ekvivalens mot `run_ticker`); 11 tester (278).
 
 ## Senaste beslut
 D-012 acceptanskriterier (§12 oförändrad; pilotresultat = funktionstest), D-013 fyllningspolicy (§4.1, `shares_reduced_at_fill` kontrafaktiskt), D-014 dedupe (key förbrukas permanent, ingen tidsåteraktivering). D-010 fortfarande föreslagen.
