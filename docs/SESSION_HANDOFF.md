@@ -1,9 +1,9 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-10-31 (Claude, steg 3f). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-11-01 (Claude, pilotgranskning). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-3a–3d mergade (PR #14–#17). **Steg 3f på grenen `feat/backtesting-trades`**: `backtesting/trades.py` (`step_position`, `Position`, `Trade`, `run_ticker`, `Rejection`, `summarize`, splitjustering, cost_estimate/cost_actual), `scripts/run_trades.py`; 16 tester (199). `SCANNER.md` §13. Ej mergad. Inga trösklar eller riskparametrar ändrade.
+3a–3f mergade (PR #14–#18). Första Alpaca-pilot (16 aktier, 10k SEK, 1 %): 9 affärer, −33,42 USD, 3 `ambiguous_same_day`; 0,5 % → 0 affärer (`cost_to_risk`). **Gren `fix/trades-diagnostics`**: tre rättningar (`open_at_end.exit_date`, `partial_skipped` per storlek vid entry + `partial_reached`, NaN-split-vakt), kolumn `cost_actual_over_risk`; 3 tester (202). Inga regler ändrade. Ej mergad.
 
 ## Senaste beslut
 D-012 acceptanskriterier (§12 oförändrad; pilotresultat = funktionstest), D-013 fyllningspolicy (§4.1, `shares_reduced_at_fill` kontrafaktiskt), D-014 dedupe (key förbrukas permanent, ingen tidsåteraktivering). D-010 fortfarande föreslagen.
