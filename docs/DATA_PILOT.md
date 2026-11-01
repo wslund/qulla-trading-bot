@@ -108,6 +108,13 @@ Metadata beskriver den **lagrade** serien efter sammanslagning: `actual_start`/`
 - **Alpaca.** Kräver konto och API-nyckel (via `.env`, se `.env.example`). Data via API för kontoinnehavarens eget bruk; vidaredistribution av SIP-data regleras av börsernas avtal. Projektägaren bekräftar aktuella villkor för sin kontotyp (öppen fråga i §8). Inga nycklar i git; `.env` är git-ignorerad.
 - **Stooq.** Stooqs egna villkor kunde inte hämtas från Claudes miljö (sajten blockerad). Känt från tredjepartsbeskrivningar: kostnadsfri CSV-nedladdning, daglig kvot, API-nyckel via CAPTCHA sedan 2026. **Projektägaren läser villkoren på stooq.com innan verkliga hämtningar görs** och noterar i §8 om personligt/icke-kommersiellt bruk och vidaredistribution. Tills dess: utvecklingsändamål, låg volym (tre tickers), ingen data i repot.
 
+- **Nasdaq Trader symbolregister (`nasdaqlisted.txt`, `otherlisted.txt`).** Publika filer från nasdaqtrader.com utan nyckel; de är nulägeslistor som Nasdaq bygger om dagligen. Villkoren står på nasdaqtrader.com (ej granskade i detalj av Claude); projektägaren läser dem och noterar här innan arkivet används till annat än lokal forskning. Vår användning: daglig lokal arkivering av råfilerna (U0), ingen vidaredistribution, inget i repot (fixturerna i `tests/fixtures/` är syntetiska rader, inte Nasdaqs filer).
+- **Alpaca `/v2/assets`.** Samma konto och villkor som ovan (Alpaca); nulägeslista över tillgångar, inte marknadsdata. Arkiveras lokalt (U0) med samma nyckelhantering: nycklar bara i `.env`, aldrig i manifest, filnamn eller utskrift.
+
+### 7.1 U0 – snapshotarkiv (`data/snapshots/`)
+
+`scripts/snapshot_listings.py` sparar varje hämtning under `data/snapshots/<källa>/<UTC-stämpel>[_n]/` med råbytes oförändrade och `manifest.json` (status `complete`/`incomplete`/`failed`, sha256 per fil och kombinerat, HTTP `Last-Modified`/`Date`, Nasdaqs `File Creation Time`-trailer som leverantörstid, radantal, rate-limit-headrar, fel). Append-only: en katalog skrivs aldrig över; två körningar samma sekund får `_1`. Ofullständiga svar (saknad trailer, fel fältantal, icke-JSON) ger `incomplete` och sparas ändå för felsökning; `complete` kräver att alla filer passerat sin kontroll. U1 får bara läsa `complete`. Schemaläggning: manuell systemd-user-timer enligt skriptets docstring (vardagar 23:30 Stockholm); inget installeras av koden.
+
 ## 8. Körlogg
 
 Fylls i av projektägaren efter lokala körningar (nätverk saknas i Claudes miljö).

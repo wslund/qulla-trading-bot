@@ -1,0 +1,2 @@
+[{"id":"b0b6dd9d-8b9b-48a9-ba46-b9d54906e415","class":"us_equity","exchange":"NASDAQ","symbol":"AAPL","name":"Apple Inc. Common Stock","status":"active","tradable":true,"marginable":true,"shortable":true,"easy_to_borrow":true,"fractionable":true},
+ {"id":"69b15845-7c63-4586-b274-1cfdfe9df3d8","class":"us_equity","exchange":"NYSE","symbol":"SIVB","name":"SVB Financial Group","status":"inactive","tradable":false,"marginable":false,"shortable":false,"easy_to_borrow":false,"fractionable":false}]
