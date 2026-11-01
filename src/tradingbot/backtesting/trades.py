@@ -127,7 +127,8 @@ class Position:
     initial_risk_usd: float
     bars_held: int = 0
     partial_done: bool = False
-    partial_skipped: bool = False
+    partial_skipped: bool = False  # set at entry: shares < min_shares_for_partial (§2.4)
+    partial_reached: bool = False  # the partial decision close (bar partial_days) was reached
     pending_partial: int = 0  # shares to sell at next open
     pending_breakeven: bool = False  # partial_skipped: move stop at next open
     pending_exit: bool = False  # trailing exit at next open
@@ -167,6 +168,8 @@ def apply_split(pos: Position, d: date, ratio: float, open_: float) -> None:
     """Express the position in post-split units; sells any fractional share as cash in lieu."""
     if ratio == 1.0:
         return
+    if not (ratio > 0):  # NaN or non-positive: unknown split data on an open position
+        raise ValueError(f"{pos.key[0]} {d}: split_ratio unknown ({ratio}) with an open position")
     raw = pos.shares * ratio
     whole = math.floor(raw + 1e-9)
     frac = raw - whole
@@ -219,6 +222,7 @@ def step_position(
         return
     # 3. close: decisions for tomorrow's open
     if pos.bars_held == exits.partial_days and not pos.partial_done:
+        pos.partial_reached = True
         if pos.shares >= costs.min_shares_for_partial:
             pos.pending_partial = math.floor(pos.shares * costs.partial_fraction)
         else:
@@ -260,7 +264,8 @@ class Trade:
     partial_date: date | None
     partial_price: float | None
     partial_shares: int
-    partial_skipped: bool
+    partial_skipped: bool  # shares < min_shares_for_partial at entry (§2.4 group), reached or not
+    partial_reached: bool  # False when the trade ended before the partial decision close
     exit_date: date
     exit_price: float  # last leg's fill price (or last close if open_at_end)
     exit_reason: str
@@ -286,6 +291,7 @@ class Trade:
         d.update(self.versions)
         d["cost_estimate_total"] = sum(self.cost_estimate.values())
         d["cost_actual_total"] = sum(self.cost_actual.values())
+        d["cost_actual_over_risk"] = d["cost_actual_total"] / self.initial_risk_usd
         d["loss_over_1r"] = bool(self.r_multiple < -1.0)
         d["loss_over_2r"] = bool(self.r_multiple < -2.0)
         d.pop("cost_estimate")
@@ -309,13 +315,15 @@ def close_trade(
     outcome: TriggerOutcome,
     costs: CostParams,
     last_close: float | None = None,
+    last_date: date | None = None,
 ) -> Trade:
     """Assemble the Trade from a closed position (or an open one at the end of data)."""
     open_at_end = not pos.closed
     sells = [leg for leg in pos.legs if leg.side == "sell"]
     proceeds = sum(leg.notional for leg in sells)
     if open_at_end:
-        assert last_close is not None
+        if last_close is None or last_date is None:
+            raise ValueError("open_at_end needs last_close and last_date")
         proceeds += pos.shares * last_close
     gross = proceeds - entry_leg.notional
     actual = {
@@ -346,7 +354,8 @@ def close_trade(
         partial_price=partial.price if partial else None,
         partial_shares=int(partial.shares) if partial else 0,
         partial_skipped=pos.partial_skipped,
-        exit_date=pos.exit_date or row["date"],
+        partial_reached=pos.partial_reached,
+        exit_date=pos.exit_date if pos.exit_date is not None else last_date,
         exit_price=exit_leg.price if exit_leg else float(last_close),
         exit_reason=pos.exit_reason or OPEN_AT_END,
         bars_held=pos.bars_held,
@@ -485,6 +494,7 @@ def run_ticker(
             fc.stop_price,
             float(decision.actual_risk),
         )
+        pos.partial_skipped = int(decision.shares) < costs.min_shares_for_partial
         ctx = {"row": row, "entry_leg": entry, "decision": decision, "outcome": out}
         if final == "filled_stopped_same_day":
             # 3c already closed the key in the registry; one exit leg, no second close.
@@ -493,7 +503,11 @@ def run_ticker(
             trades.append(close_trade(pos, ticker=ticker, costs=costs, **ctx))
             pos = None
     if pos is not None:
-        trades.append(close_trade(pos, ticker=ticker, costs=costs, last_close=c[-1], **ctx))
+        trades.append(
+            close_trade(
+                pos, ticker=ticker, costs=costs, last_close=c[-1], last_date=dates[-1], **ctx
+            )
+        )
     return trades, rejections, reg
 
 

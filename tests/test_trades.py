@@ -134,6 +134,7 @@ def test_partial_skipped_moves_stop_to_breakeven_without_sell_leg() -> None:
     trades, _, _ = run_ticker(s, cands, small_approver(), costs=TIERED, trigger=TP)
     t = trades[0]
     assert t.shares == 1 and t.partial_skipped is True and t.partial_shares == 0
+    assert t.partial_reached is True
     assert [leg.name for leg in t.legs] == ["entry", "exit"]
     assert t.exit_reason == STOP and t.exit_price == pytest.approx(f * (1 - SLIP))
     assert t.pnl_gross_usd == pytest.approx(-f * SLIP)  # breakeven minus exit slippage
@@ -345,6 +346,52 @@ def asdict_trade(t: Trade) -> dict:
     from dataclasses import fields
 
     return {f.name: getattr(t, f.name) for f in fields(Trade)}
+
+
+# --- regressions from the first pilot review (2026-11-01) ---
+
+
+def test_one_share_stopped_before_day_3_is_still_partial_skipped() -> None:
+    """ANET-case: one share, stopped on bar 1. The §2.4 group is defined by size at entry,
+    so partial_skipped is True even though the partial decision was never reached."""
+    s, cands, t0, f = scripted([(0.995, 1.0, 0.97, 0.98)])
+    t = run_ticker(s, cands, small_approver(), costs=TIERED, trigger=TP)[0][0]
+    assert t.shares == 1 and t.exit_reason == STOP and t.bars_held == 1
+    assert t.partial_skipped is True and t.partial_reached is False
+    assert [leg.name for leg in t.legs] == ["entry", "exit"]
+    # 33 shares stopped on bar 1: not in the group, and the partial was not reached either.
+    big = run_ticker(s, cands, big_approver(), costs=TIERED, trigger=TP)[0][0]
+    assert big.partial_skipped is False and big.partial_reached is False
+    assert summarize([t, big], [])["partial_skipped"] == 1
+
+
+def test_breakeven_stop_after_partial_is_a_small_loss_not_minus_one_r() -> None:
+    """AMD-case signature: partial filled near entry on bar 4, rest stopped at breakeven the
+    same day -> exit_reason 'stop' with R between -0.5 and 0 (costs + slippage only)."""
+    bars = RISE_THEN_FADE[:3] + [(1.003, 1.004, 0.995, 0.996)]
+    s, cands, t0, f = scripted(bars)
+    t = run_ticker(s, cands, big_approver(), costs=TIERED, trigger=TP)[0][0]
+    assert t.exit_reason == STOP and t.bars_held == 4 and t.partial_shares == 11
+    assert t.exit_price == pytest.approx(f * (1 - SLIP))  # breakeven = entry fill
+    assert -0.5 < t.r_multiple < 0
+    assert t.to_row()["cost_actual_over_risk"] == pytest.approx(
+        sum(t.cost_actual.values()) / t.initial_risk_usd
+    )
+
+
+def test_nan_split_ratio_on_open_position_is_refused() -> None:
+    from tradingbot.backtesting.trades import apply_split as pos_split
+
+    pos = Position(("SET", date(2024, 2, 1)), date(2024, 3, 4), 100.0, 33, 96.0, 120.0)
+    with pytest.raises(ValueError, match="split_ratio unknown"):
+        pos_split(pos, date(2024, 3, 6), float("nan"), open_=100.0)
+    # In a full run the levels gate refuses the whole ticker when any split_ratio is NaN
+    # (compute_levels), so the series never reaches apply_split with NaN; see SCANNER §9.
+    s, cands, t0, f = scripted(RISE_THEN_FADE)
+    i0 = int(s.index[s["date"] == t0][0])
+    s.loc[i0 + 2, "split_ratio"] = np.nan
+    trades, rej, _ = run_ticker(s, cands, big_approver(), costs=TIERED, trigger=TP)
+    assert trades == [] and all(r.stage == "levels" for r in rej)
 
 
 def test_tuple_approver_is_refused() -> None:
