@@ -1,6 +1,6 @@
 # PORTFOLIO_DESIGN – gemensam portfölj-backtestmotor (fas 6)
 
-**Version:** 0.1 (utkast, 2026-11-01). Teknisk design, ingen implementation. Bygger på `STRATEGY_SPEC.md` v0.2.1 (§6.1, §8, §11–12), `RISK_MODEL.md` v0.2 (§2.1–2.8, §3) och `STEP3_DESIGN.md` v0.3 samt de mergade modulerna 3a–3f/3e. Taggar: `[D]` designval att fastställa, `[H]` hypotes/testvariant, `[T]` vår regel.
+**Version:** 0.2 (2026-11-01). Grundarkitekturen godkänd efter ChatGPT-granskning av v0.1; förtydliganden i §2, §4, §6, §7 och §14. Teknisk design, ingen implementation. Bygger på `STRATEGY_SPEC.md` v0.2.1 (§6.1, §8, §11–12), `RISK_MODEL.md` v0.2 (§2.1–2.8, §3) och `STEP3_DESIGN.md` v0.3 samt de mergade modulerna 3a–3f/3e. Taggar: `[D]` designval att fastställa, `[H]` hypotes/testvariant, `[T]` vår regel.
 
 ## 0. Vad som finns och vad som saknas
 
@@ -34,11 +34,13 @@ Dagsdata har ingen tidsordning inom dagen; minutdata har det bara för ORB-dagar
 | Fas | Vad | Får läsa |
 |---|---|---|
 | 0 `pre_open` | Exit-ordrar beslutade vid stängning T−1 (delvinst, trailing, breakeven-flytt). Kandidater för T: `SetupRegistry.decide`, nivåer (3a), `OrderPlan` på dagsformlerna, prioritering, reservationer. Förlust-/drawdownläge från T−1 avgör om nya ordrar får läggas alls. | staplar ≤ T−1, kontot vid T−1 stängning |
-| 1 `open` | Exit-ordrar fylls vid `open[T]` (−slip). Stop-gap: `open ≤ stop` → fylls vid open. Splits appliceras på positioner innan prisjämförelser (`apply_split`, cash-in-lieu till cash). | `open[T]`, `split_ratio[T]` |
+| 1 `open` | **Först** splitjustering (§7.1) av alla öppna positioner och alla väntande ordrar/reservationer för tickers med `split_ratio[T] ≠ 1`. **Därefter** exit-ordrar vid `open[T]` (−slip) och stop-gap `open ≤ stop` → fylls vid open. | `open[T]`, `split_ratio[T]` |
 | 2 `intraday` | Befintliga positioner: `low ≤ stop` → stoppad. Nya entries: dagsmodell `evaluate_day` på T:s open/high/low; ORB-modell `simulate_orb_day` på minutströmmen (fyllning, same-bar, intradagsstopp). Godkännande via `assess_fill` **inom reservationen**. | `high/low[T]`, minutstaplar för T i ordning |
 | 3 `close` | Mark-to-market på `close[T]`; equity, orealiserat, exponering, öppen risk; delvinst-/trailing-beslut för T+1 (`step_position` steg 3); förlustgränser och drawdown (HWM) → läge för T+1; frigivning av ofyllda reservationer; dagsrad i ledgern. | `close[T]` |
 
 Två tickers kan inte påverka varandra inom en fas annat än genom kontot, och kontot ändras i fas 1–2 bara genom fyllningar vars kapital redan var reserverat i fas 0. Därmed spelar fyllningsordningen inom dagen ingen roll för om en order är finansierad – det är det som gör dagsmodellen väldefinierad utan intradagstider.
+
+**Ordning mellan tickers i dagsmodellen är okänd – och får inte spela roll.** Kravet formuleras som en invariant, inte som en konvention: i fas 2 får ingen storhet som en tickers fyllning läser (reservation, antal, godkännande) bero på en annan tickers fyllning samma dag. Konkret: (a) alla beslut som kräver kapacitet tas i fas 0 på T−1-data; (b) `assess_fill` i fas 2 ser bara sin egen reservation; (c) ingen "först till kvarn"-logik finns i fas 2. Test §10.1b: permutation av tickerordningen ger identiska tabeller, och ett sabotagetest där fas 2 medvetet får läsa kontot ska fälla testet. Tickerordning används **bara** som deterministisk iterationsordning och, i baslinjen, som prioritering i fas 0 (§6) – där den är känd T−1 och därför tillåten.
 
 `step_position` används oförändrad men delas upp i anrop per fas: fas 1 = dess steg 1–2 med `open`, fas 2 = steg 2 med `low`, fas 3 = steg 3. Praktiskt: en tunn `PositionDay`-adapter som anropar samma kod i tre steg, med test att resultatet per position är identiskt med dagens `step_position` när kontot inte binder.
 
@@ -68,9 +70,23 @@ Regler:
 
 Varje väntande entry-order får en `Reservation(ticker, key, shares_ordered, fill_est, reserved_usd)` i fas 0 med `reserved_usd = shares_ordered × fill_est + entry-courtage + entry-FX` (3d:s `capital_required` på planen). En order läggs **bara om den är fullt finansierad**; delvis finansiering reduceras inte (RISK_MODEL §2.1.6: en order som inte klarar kontrollerna läggs inte).
 
-Vid fyllning (fas 2): `assess_fill` körs på den antagna fyllningen med `cash_available = reservation.reserved_usd` (inte hela kontot). Gap-fyllning över reservationen → `insufficient_capital` på portföljnivå (ny orsak `reservation_exceeded`) eller kontrafaktisk reduktion enligt D-013 – samma flaggor som i dag. Vid `no_trigger`/`lapsed`/avslag frigörs reservationen i fas 3.
+Vid fyllning (fas 2): `assess_fill` körs på den antagna fyllningen med `cash_available = reservation.reserved_usd` (inte hela kontot).
 
-ORB-ordrar: reservationen i fas 0 görs på **dagsplanen** (nivå × (1+slip), stop `low[T−1]`) eftersom trigger och ORB-low inte finns före 09:35. Vid 09:35 dimensioneras ordern på `OrderPlan(trigger, orb_low)` (som i dag) men får högst använda reservationen; blir ORB-planen dyrare än reservationen reduceras **inte** – ordern avstås med `reservation_exceeded` `[D]`. Alternativ `[H]`: reservation med marginal `max_gap_entry`.
+**Två skilda orsaker, aldrig hopslagna:**
+- `insufficient_capital` – kapitalbehovet överstiger kontots *tillgängliga köpkraft* `cash − reserved_others` vid tidpunkten (dvs. affären hade inte rymts även utan reservationsregeln).
+- `reservation_exceeded` – kapitalbehovet överstiger den egna reservationen men **ryms** inom `cash − reserved_others`. Det är reservationsregelns egen kostnad, inte kapitalbrist. Räknas i ledgern (`reservation_blocked_fills`, `reservation_blocked_usd`) och i rapporten som egen rad; blir andelen stor är det ett argument för `[H]`-scenariot "reservation med marginal", inte för att tyst reducera antalet.
+Kontrafaktisk reduktion enligt D-013 (`shares_reduced_at_fill`) gäller fortfarande riskgränsen, inte kapitalet. Vid `no_trigger`/`lapsed`/avslag frigörs reservationen i fas 3.
+
+**ORB – explicita tidpunkter:**
+
+| Tidpunkt | Känt | Görs |
+|---|---|---|
+| fas 0 (före 09:30) | nivå, `low[T−1]`, ADR, konto T−1 | kapacitetskontroll (§5), prioritering, reservation på **dagsplanen** `OrderPlan(nivå × (1+slip), max(low[T−1], ADR-tak))` |
+| 09:34-stapeln konsumerad (`OpeningRange.complete`) | `orb_high`, `orb_low` → trigger | ordern dimensioneras på `OrderPlan(trigger × (1+slip), max(orb_low, ADR-tak))` (3d steg 1); kapitalbehov jämförs med reservationen → vid överskridande `reservation_exceeded` (eller `insufficient_capital` om det inte heller ryms i köpkraften); ingen reduktion |
+| fyllningsstapeln | antagen fyllning, initial stop | `assess_fill` steg 2 (faktisk risk, kontrafaktisk reduktion per D-013, `cost_to_risk`) – samma som i dag |
+| senare staplar / fas 3 | stop, stängning | intradagsstopp, mark-to-market |
+
+Reservationen görs alltså en gång och aldrig om intradag; ORB-planen får vara billigare men inte dyrare än reservationen.
 
 ## 5. Portföljgränser och lägen (`limits.py`)
 
@@ -92,21 +108,20 @@ Avslag i fas 0 går via `record_no_fill(key, T, reason)` precis som i dag: **key
 
 ## 6. Prioritering vid flera signaler samma dag (`priority.py`) `[D]`
 
-Problemet: fas 0 kan ha fler finansierbara kandidater än kapacitet (positioner, risk, kontanter). Valet måste göras på data ≤ T−1 och vara deterministiskt och förhandsregistrerat.
+Problemet: fas 0 kan ha fler finansierbara kandidater än kapacitet (positioner, risk, kontanter). Valet måste göras på data ≤ T−1 och vara deterministiskt.
 
-Förslag `[T]` (default, ska fastställas som beslut innan första körning):
-1. `consol_pct_below_high` stigande (närmast nivån först – lägst avstånd till trigger, minst "sträckning" vid fyllning),
-2. `consol_tightness` stigande,
-3. ticker alfabetiskt (ren tiebreak, ingen informationsbärare).
+**Baslinje (huvudscenario):** ticker alfabetiskt. Neutral i den meningen att den inte bär någon strategiinformation; den är känd T−1 och ger reproducerbara körningar. Den är inte "rättvis" – en ticker tidigt i alfabetet får systematiskt företräde – men det är en känd, rapporterad snedvridning, inte en dold. Som komplement körs `[H]` slumpad ordning med fast frö (flera frön) för att visa spridningen som prioriteringen i sig orsakar.
 
-Alternativ som **scenarier**, inte parametersök: `[H]` `prior_move_pct` fallande (starkast momentum först); `[H]` `dollar_volume_20d` fallande (mest likvid först); `[H]` slumpad ordning med fast frö (nollhypotes: om prioriteringsregeln inte slår slumpen bär den ingen information). Regeln rapporteras alltid i resultatet, och antalet dagar där den faktiskt avgjorde något (`priority_binding_days`) loggas – är det få dagar är frågan ointressant vid 10 000 SEK.
+**Forskningshypotes (separat scenario, förhandsbestämd, inte validerad):** `consol_pct_below_high` stigande, därefter `consol_tightness` stigande, därefter ticker. Hypotesen är att kandidater närmast nivån med tätast konsolidering oftare fyller och sträcks mindre vid fyllning. Den registreras i DECISIONS som P-002-hypotes **innan** den körs, jämförs mot baslinjen och slumpen på samma körning, och får inte presenteras som en fördel förrän den slagit båda på point-in-time-data walk-forward. Andra features (`prior_move_pct`, `dollar_volume_20d`) är tillåtna som ytterligare förhandsregistrerade hypoteser, aldrig som efterhandsval.
 
-Kandidater som inte ryms får `not_prioritized` (ingen key-förbrukning). Nästa dag tävlar de igen om de fortfarande är kandidater.
+Krav på alla prioriteringsfeatures: de ska finnas i kandidatraden för dag T (dvs. beräknade på staplar ≤ T−1, `asof_date`). Ingen fyllningsinformation, inget intradagspris, ingen portföljhändelse från dag T får ingå. Testet §10.1 kör baslinjen och hypotesen på samma syntetiska dag och kontrollerar att ordningen bara beror på T−1-kolumner.
+
+Kandidater som inte ryms får `not_prioritized` (ingen key-förbrukning) och tävlar igen nästa kandidatdag. `priority_binding_days` loggas; vid 10 000 SEK väntas gränsen sällan binda, och då är hela frågan sekundär.
 
 ## 7. Exits, splits och ordningen exits-före-entries
 
 - Exits (stop-gap, stop, delvinst, trailing, breakeven) är exakt 3f:s `step_position`, nu fasdelad (§2). Delvinstens säljben, `partial_skipped`, `stop_intraday` (ORB) och `ambiguous_same_*` är oförändrade.
-- Splits: `apply_split` på varje öppen position i fas 1 innan prisjämförelser; bråkdel → cash-in-lieu **krediteras `cash`** (i dag bokförs den bara i affären). Test: equity före och efter split identisk på samma pris.
+- **Splitdagar (§7.1), ordning inom fas 1 för en ticker med `split_ratio[T] = r`:** (1) öppen position: antal × r, stop / r, entryreferens / r, bråkdel → cash-in-lieu krediteras `cash` till `open[T]` (i dag bokförs den bara i affären); (2) väntande exit-ordrar från T−1: antal × r; (3) väntande entry-order: nivåer kommer redan i T-enheter från `compute_levels` (3a delar med `split_ratio[T]`), så `shares_ordered`, `fill_est` och reservationen beräknades i fas 0 i T-enheter och ändras inte – men det **kontrolleras** (assert) att planens enheter är T:s; (4) först därefter exit-fyllningar vid `open[T]`, stop-gap och fas 2:s prisjämförelser. ORB-dagar: minutstaplarna är redan i T-enheter (`raw`), så trigger/orb_low behöver ingen justering; `split_on_entry_day` följer med i affären. Test: equity före och efter split identisk vid samma pris, stop/entry i nya enheter, exit-order med rätt antal.
 - Exits före entries gäller dubbelt: fas 1–2 stänger innan fas 2:s entries körs för samma ticker (registret kräver det), och kontot hinner registrera realiserat innan stängningens mark. Kapitalet från exits blir dock tillgängligt först nästa fas 0 (§3).
 - Avnoterad/handelsstoppad aktie med öppen position: värderas till 0 tills datalagret visar slutkurs (RISK_MODEL §2.7); affären får `exit_reason = delisted_zero` och flaggas. Gäller bara point-in-time-körningen.
 
@@ -125,10 +140,10 @@ Rapporten (§11.6–11.8, D-012): antal affärer, EV i R, PF, träffprocent, sni
 
 ## 10. Deterministiska tester (offline, syntetiska serier)
 
-1. **Samtidiga signaler:** tre tickers kandidat samma dag, kapacitet två → de två med lägst `consol_pct_below_high` får ordrar, tredje `not_prioritized`; resultatet oberoende av tickrarnas inmatningsordning; tiebreak alfabetisk testad separat.
-2. **Kapitalbrist:** cash räcker till exakt en reservation → andra `insufficient_cash`; `cash − 0,01` → ingen; frigivning i fas 3 gör nästa dags order möjlig.
+1. **Samtidiga signaler:** tre tickers kandidat samma dag, kapacitet två → (a) baslinje: de två första alfabetiskt får ordrar, tredje `not_prioritized`; hypotes-scenariot väljer efter `consol_pct_below_high` på samma dag; båda beror bara på T−1-kolumner (byt T:s priser → samma val). (b) **Ordningsinvarians i fas 2:** permutation av tickerordningen ger bitidentiska tabeller; ett sabotagetest där fas 2 får läsa kontot fäller testet.
+2. **Kapitalbrist och reservation:** cash räcker till exakt en reservation → andra `insufficient_cash`; `cash − 0,01` → ingen; frigivning i fas 3 gör nästa dags order möjlig. Gap-fyllning som överstiger den egna reservationen men ryms i köpkraften → `reservation_exceeded` (inte `insufficient_capital`) och räknas i `reservation_blocked_fills`; samma fall utan köpkraft → `insufficient_capital`. ORB-plan dyrare än dagsplanen → `reservation_exceeded`.
 3. **Exits före entries:** position A stoppas vid open på T och B signalerar T → B läggs bara om den var finansierad före A:s exit (ingen samma-dags-återanvändning); nästa dag räcker kapitalet.
-4. **Split med cash-in-lieu:** 3:2-split på öppen position → `cash` ökar med bråkdel × open, equity oförändrad vid samma pris, stop/entryreferens /1,5, R identisk med osplittad.
+4. **Split med cash-in-lieu:** 3:2-split på öppen position → `cash` ökar med bråkdel × open, equity oförändrad vid samma pris, stop/entryreferens /1,5, R identisk med osplittad; väntande delvinstorder × 1,5; splitjusteringen sker före exit-fyllningen samma dag (en stop som bara träffas i gamla enheter får inte lösa ut).
 5. **Konservering:** varje dag `equity == cash + Σ shares × close` och realiserat = Σ affärers `pnl_net` (+ cash-in-lieu − deposit-FX).
 6. **Look-ahead:** mutera alla staplar > T för alla tickers (och lägg en split på T+1) → ledgerrad T, ordrar, reservationer, prioritering och fyllningar för T identiska; raderna efter T ändrade (testet kräver båda).
 7. **Gränser:** `max_open_positions`, `open_risk`, `gross_exposure` var för sig bindande med handräknade tal; förlustgräns vid stängning blockerar T+1 och släpper enligt regel; drawdown → `HALTED`, inga nya ordrar, befintlig position stängs av sin stop, körningen slutar `halted`.
@@ -176,19 +191,25 @@ Regler för att testa den **utan att optimera mot piloten**:
 
 Funktionstest på piloten efter P6; inget resultat tolkas som edge före P8 och Q-002.
 
-## 14. Öppna beslut (måste tas före P3/P4)
+## 14. Beslut efter granskningen av v0.1 (2026-11-01)
 
-| # | Beslut | Förslag |
-|---|---|---|
-| 1 | Prioriteringsregel §6 | `consol_pct_below_high` ↑, `consol_tightness` ↑, ticker; slump med frö som nollhypotes |
-| 2 | Samma-dags-återanvändning av kapital från exits | nej i grundmodellen; `[H]`-scenario |
-| 3 | ORB-reservation | dagsplanen; `reservation_exceeded` i stället för reduktion |
-| 4 | Förlustgränser mäts vid stängning | ja (dagsdata); intradagsvariant kräver minutdata för alla positioner |
-| 5 | Sektorkälla för `max_per_sector` | av tills Q-002 ger GICS eller motsvarande |
-| 6 | ISK-skatt i ledgern | rad vid årsskifte, av tills parametrar satta |
-| 7 | Risktrappans steg | förhandsregistreras i DECISIONS innan första körning (§12) |
-| 8 | `max_open_positions` vid 10 000 SEK | 4 enligt RISK_MODEL §3; rapportera hur ofta gränsen binder |
-| 9 | Delfyllning | ingen i simulering (dagsdata); §2.3 gäller drift |
+Grundarkitekturen (sessionsklocka, faser, ett konto, reservationer, återanvändning av 3a–3f/3e, ekvivalenstester) är godkänd. Status per punkt – det som är **beslut** förs in i `DECISIONS.md` som D-015–D-017 innan P3/P4; resten är dokumenterade pilotantaganden `[D]` i denna fil.
+
+| # | Punkt | Status | Innehåll |
+|---|---|---|---|
+| 1 | Prioriteringsregel | **D-015** | baslinje ticker alfabetiskt; slump med frö som spridningsmått; `consol_pct_below_high`/`consol_tightness` som förhandsregistrerad P-002-hypotes, separat scenario; alla features kända T−1 |
+| 2 | Samma-dags-återanvändning av exitkapital | pilotantagande | nej; `[H]`-scenario |
+| 3 | Reservationer | **D-016** | konservativ förhandsreservation; `reservation_exceeded` skild från `insufficient_capital`; `reservation_blocked_fills/usd` rapporteras; ORB: reservation på dagsplanen i fas 0, dimensionering vid komplett opening range, riskbedömning vid fyllningsstapeln (§4) |
+| 4 | Förlustgränser vid stängning | pilotantagande | begränsning: ingen intradagsequity på dagsdata |
+| 5 | Sektorgräns | pilotantagande | av tills sektordata (Q-002) |
+| 6 | ISK-skatt | pilotantagande | ledgerrad vid årsskifte, av tills parametrar satta |
+| 7 | Risktrappa | **D-017** | testas bara som förhandsregistrerat scenario enligt §12; stegen skrivs in i DECISIONS innan första körning; utvärderas walk-forward på point-in-time, aldrig mot pilotens affärer |
+| 8 | `max_open_positions = 4` | pilotantagande | rapportera bindningsfrekvens |
+| 9 | Ingen delfyllning i simulering | pilotantagande | §2.3 gäller drift |
+| 10 | Splitordning §7.1 | designregel `[D]` | justering av positioner, stoppar, antal och ordernivåer före dagens fyllningar; ingår i D-016:s text som invariant |
+| 11 | Ordningsinvarians mellan tickers i fas 2 | designregel `[D]` | invariant + permutations- och sabotagetest (§2, §10.1b) |
+| 12 | Inga trösklar eller riskparametrar optimeras mot pilotens 6 ORB-/9 dagsaffärer | bekräftat | gäller också prioriteringshypotesen och risktrappan |
 
 ## Versionshistorik
+- 0.2 (2026-11-01): efter ChatGPT-granskning av v0.1. §6 baslinje ticker alfabetiskt, featureprioritering som förhandsregistrerad hypotes; §4 `reservation_exceeded` skild från `insufficient_capital` med diagnostik, ORB-tidpunkter explicita; §7.1 splitordning före fyllningar; §2 ordningsinvarians mellan tickers i fas 2 som invariant med test; §14 omgjord till beslutsstatus (D-015–D-017 att föra in).
 - 0.1 (2026-11-01): första utkast efter 3a–3f/3e och de två pilotkörningarna (dagsmodell: 9 affärer; ORB: 6 affärer, 15 `orb_incomplete` med 31 av 75 öppningsminuter saknade – regeln om fem kompletta minuter behålls).

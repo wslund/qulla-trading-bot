@@ -1,9 +1,9 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-11-01 (Claude, portföljdesign v0.1). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-11-01 (Claude, portföljdesign v0.2). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. **Gren `docs/portfolio-design`**: `docs/PORTFOLIO_DESIGN.md` v0.1 (fasindelad sessionsklocka, ett konto med reservationer, gränser, prioritering, risktrappa som förhandsregistrerat scenario, arbetsordning P1–P8, öppna beslut). Ingen kod.
+3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. **Gren `docs/portfolio-design`**: `docs/PORTFOLIO_DESIGN.md` v0.2 (arkitektur godkänd av ChatGPT-granskning; baslinje tickerordning, `reservation_exceeded`-diagnostik, ORB-tidpunkter, splitordning, ordningsinvarians). D-015–D-017 ska föras in i DECISIONS.md av projektägaren. Ingen kod.
 
 ## Senaste beslut
 D-012 acceptanskriterier (§12 oförändrad; pilotresultat = funktionstest), D-013 fyllningspolicy (§4.1, `shares_reduced_at_fill` kontrafaktiskt), D-014 dedupe (key förbrukas permanent, ingen tidsåteraktivering). D-010 fortfarande föreslagen.
