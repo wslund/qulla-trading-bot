@@ -76,7 +76,8 @@ from tradingbot.signals.daily_trigger import (
 from tradingbot.signals.orb import NO_MINUTE_BARS, STOP_INTRADAY, OrbParams, simulate_orb_day
 from tradingbot.signals.state import Reason, SetupRegistry
 
-PORTFOLIO_VERSION = "2"  # 2: entry_model daily|orb (P5), candidate-day diagnostics
+PORTFOLIO_VERSION = "3"  # 3: actual stop risk checked at fill (D-018)
+OPEN_RISK_AT_FILL = "open_risk_at_fill"
 DAILY = "daily"
 ORB = "orb"
 MinuteBarsLoader = Callable[[str, date], "pd.DataFrame | None"]
@@ -114,6 +115,14 @@ class _Order:
     candidate: Candidate
     plan: ReservationPlan
     rank: int
+    risk_cap: float | None = None  # D-018: planned risk + equal share of the day's slack
+
+
+def _fill_risk_cap(order: _Order, slack_per_order: float) -> float:
+    """Most actual stop risk this fill may carry: its own planned risk plus an equal share of
+    the slack left in the open-risk budget after all of today's plans (PRE_OPEN data only,
+    so the cap never depends on another ticker's fill)."""
+    return order.plan.risk_usd + slack_per_order
 
 
 @dataclass
@@ -129,6 +138,7 @@ class PortfolioResult:
     events: list[dict] = field(default_factory=list)  # non-bookkeeping notes (no_bar, …)
     candidate_stats: dict[str, Any] = field(default_factory=dict)  # input candidate rows/days
     orb_attempts: list[dict] = field(default_factory=list)  # one row per reserved ORB order
+    risk_audit: list[dict] = field(default_factory=list)  # per session: budget vs actual risk
 
     def ledger_frame(self) -> pd.DataFrame:
         return self.account.ledger.rows_frame()
@@ -219,6 +229,7 @@ def run_portfolio(
     loss_states: list[LossState] = [loss]
     pending_stops: dict[tuple, float] = {}
     orb_attempts: list[dict] = []
+    risk_audit: list[dict] = []
     slip = p.trigger.slippage_bps / 10_000
 
     for session in clock:
@@ -275,6 +286,35 @@ def run_portfolio(
             for plan in day.accepted:
                 pr = by_key[plan.key]
                 orders[plan.ticker] = _Order(pr.candidate, plan, pr.rank)
+            # D-018: split today's open-risk slack equally between the accepted orders, from
+            # PRE_OPEN quantities only (positions' current risk + every order's planned risk).
+            if p.limits.max_open_risk_pct is not None:
+                budget = equity_prev * p.limits.max_open_risk_pct
+                positions_risk = day.snapshot_before.open_risk_usd
+                planned_sum = sum(o.plan.risk_usd for o in orders.values())
+                slack = max(0.0, budget - positions_risk - planned_sum)
+                for o in orders.values():
+                    o.risk_cap = _fill_risk_cap(o, slack / len(orders))
+                audit = {
+                    "date": T,
+                    "budget": budget,
+                    "positions_risk": positions_risk,
+                    "planned_sum": planned_sum,
+                    "n_orders": len(orders),
+                    "actual_sum": 0.0,
+                    "actual_if_all_filled": 0.0,
+                }
+            else:
+                audit = {
+                    "date": T,
+                    "budget": None,
+                    "positions_risk": None,
+                    "planned_sum": None,
+                    "n_orders": len(orders),
+                    "actual_sum": 0.0,
+                    "actual_if_all_filled": 0.0,
+                }
+            risk_audit.append(audit)
             for r in day.rejected:
                 reg.record_no_fill(r.key, T, r.reason)
                 rejections.append(Rejection(r.ticker, T, r.key[1], r.stage, r.reason))
@@ -391,6 +431,10 @@ def run_portfolio(
             reason = d.reason
             if not d.approved and reason == INSUFFICIENT_CAPITAL:
                 reason = classify_overrun(account, sig.key, d.capital_required) or reason
+            if d.approved:
+                audit["actual_if_all_filled"] += float(d.actual_risk)
+                if od.risk_cap is not None and d.actual_risk > od.risk_cap + 1e-9:
+                    reason = OPEN_RISK_AT_FILL  # D-018: would break the open-risk budget
             dec_rows.append(
                 {
                     "date": T,
@@ -404,12 +448,16 @@ def run_portfolio(
                     "reservation_usd": res.amount_usd,
                     "cost_to_risk": d.cost_to_risk,
                     "rank": od.rank,
+                    "actual_risk": float(d.actual_risk),
+                    "planned_risk": od.plan.risk_usd,
+                    "risk_cap": od.risk_cap,
                 }
             )
-            if not d.approved:
+            if reason != APPROVED:
                 approve_and_record(reg, out, False, reason)
                 rejections.append(Rejection(t, T, sig.key[1], "risk", reason))
                 continue
+            audit["actual_sum"] += float(d.actual_risk)
             if p.entry_model == DAILY and d.shares_ordered != od.plan.shares_ordered:
                 raise RuntimeError(
                     f"{t} {T}: sized {d.shares_ordered} but reserved {od.plan.shares_ordered}"
@@ -507,6 +555,7 @@ def run_portfolio(
         events,
         cand_stats,
         orb_attempts,
+        risk_audit,
     )
 
 

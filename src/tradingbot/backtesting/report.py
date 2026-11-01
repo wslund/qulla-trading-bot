@@ -240,6 +240,8 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
             ),
             "reservation_blocked_usd": reservation_blocked_usd,
             "priority_binding_days": int(sum(bool(r.get("priority_binding")) for r in day_rows)),
+            "open_risk_at_fill": int(rejections["portfolio"].get("open_risk_at_fill", 0)),
+            "risk_audit": _risk_audit(result.risk_audit),
             "days_with_candidates": int(len(day_rows)),
             "loss_state_sessions": {str(k): int(v) for k, v in states.items()},
             "final_state": result.loss_states[-1].state if result.loss_states else None,
@@ -268,6 +270,26 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
         },
     }
     return {"summary": report, "equity_curve": equity_curve}
+
+
+def _risk_audit(rows: list[dict]) -> dict[str, Any]:
+    """D-018 invariant per session: Σ actual stop risk of new fills + positions' risk <= budget."""
+    with_budget = [r for r in rows if r.get("budget") is not None]
+    if not with_budget:
+        return {
+            "days": 0,
+            "max_actual_over_budget": None,
+            "days_over_budget": 0,
+            "days_prevented": 0,
+        }
+    over = [(r["actual_sum"] + r["positions_risk"]) / r["budget"] for r in with_budget]
+    prevented = sum(1 for r in with_budget if r["actual_if_all_filled"] > r["actual_sum"] + 1e-9)
+    return {
+        "days": len(with_budget),
+        "max_actual_over_budget": float(max(over)),
+        "days_over_budget": int(sum(x > 1 + 1e-9 for x in over)),
+        "days_prevented": int(prevented),
+    }
 
 
 def params_to_dict(params) -> dict:
@@ -389,6 +411,8 @@ def render_text(summary: dict) -> str:
         f"priority_binding_days={lim['priority_binding_days']} av {lim['days_with_candidates']}",
         f"Förlustlägen {lim['loss_state_sessions']}; slutläge {lim['final_state']} "
         f"halted_on={lim['halted_on']}",
+        f"Faktisk risk vid fyllning (D-018): open_risk_at_fill={lim['open_risk_at_fill']}, "
+        f"audit {lim['risk_audit']}",
         f"Gamla kurser (position utan dagsstapel): {st['sessions']} sessioner {st['by_ticker']}",
         f"Kandidater: {cd['candidate_rows']} rader på {cd['candidate_days_distinct']} sessioner, "
         f"{cd['days_with_reservable_candidates']} dagar med reserverbar kandidat, "
