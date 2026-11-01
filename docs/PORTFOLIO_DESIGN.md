@@ -210,6 +210,10 @@ Grundarkitekturen (sessionsklocka, faser, ett konto, reservationer, återanvänd
 | 11 | Ordningsinvarians mellan tickers i fas 2 | designregel `[D]` | invariant + permutations- och sabotagetest (§2, §10.1b) |
 | 12 | Inga trösklar eller riskparametrar optimeras mot pilotens 6 ORB-/9 dagsaffärer | bekräftat | gäller också prioriteringshypotesen och risktrappan |
 
+## 15. Implementationsstatus
+
+**P1 (gren `feat/portfolio-p1-account`, 2026-11-01):** `backtesting/clock.py` (`SessionClock`, `Session`, `Phase`, `steps()`), `backtesting/account.py` (`Account.from_sek`, `reserve/release`, `buy` endast mot reservation med `reservation_exceeded`/`would_fit`, `sell`, `apply_split` enligt §7.1 inkl. cash-in-lieu till `cash` och omskrivning av väntande reservation, `mark`, `leg_costs`), `backtesting/ledger.py` (`LedgerEvent` per kapitalrörelse, `LedgerRow` per session med diagnosfält för P3 förberedda, `check_identities`). Identiteter som kontrolleras vid varje sessionsrad: `cash = start + realized − Σ kostnadsbas`, `equity = cash + Σ antal × mark = start + realized + unrealized`, `0 ≤ reserved = Σ reservationer ≤ cash`. `realized` absorberar courtage och FX när de betalas (entrykostnader direkt), säljresultat mot kostnadsbasen och cash-in-lieu; slippage ligger i priserna och spåras bara som information. `state` är en platshållare för P2. 14 tester. **D-015–D-017 saknas fortfarande i DECISIONS.md och måste föras in före P3.**
+
 ## Versionshistorik
 - 0.2 (2026-11-01): efter ChatGPT-granskning av v0.1. §6 baslinje ticker alfabetiskt, featureprioritering som förhandsregistrerad hypotes; §4 `reservation_exceeded` skild från `insufficient_capital` med diagnostik, ORB-tidpunkter explicita; §7.1 splitordning före fyllningar; §2 ordningsinvarians mellan tickers i fas 2 som invariant med test; §14 omgjord till beslutsstatus (D-015–D-017 att föra in).
 - 0.1 (2026-11-01): första utkast efter 3a–3f/3e och de två pilotkörningarna (dagsmodell: 9 affärer; ORB: 6 affärer, 15 `orb_incomplete` med 31 av 75 öppningsminuter saknade – regeln om fem kompletta minuter behålls).
