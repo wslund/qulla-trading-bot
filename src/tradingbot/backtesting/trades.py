@@ -40,6 +40,7 @@ the last close without exit costs and reported separately.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any
@@ -63,9 +64,17 @@ from tradingbot.signals.daily_trigger import (
     build_signal,
     evaluate_day,
 )
+from tradingbot.signals.orb import (
+    NO_MINUTE_BARS,
+    STOP_INTRADAY,
+    OrbParams,
+    simulate_orb_day,
+)
 from tradingbot.signals.state import STATE_VERSION, Reason, SetupKey, SetupRegistry
 
-TRADES_VERSION = "1"
+TRADES_VERSION = "2"  # 2: entry_model + intraday fields (3e)
+DAILY_MODEL = "daily_stop_entry"
+MinuteBarsLoader = Callable[[str, date], "pd.DataFrame | None"]
 
 # exit reasons
 AMBIGUOUS_SAME_DAY = "ambiguous_same_day_stop"
@@ -283,12 +292,16 @@ class Trade:
     fx_rate: float
     fx_mode: str
     versions: dict[str, str]
+    entry_model: str = DAILY_MODEL
+    intraday: dict[str, Any] = field(default_factory=dict)  # ORB: trigger, orb_high/low, times
 
     def to_row(self) -> dict:
         d = asdict(self)
         d.pop("legs")
         d.pop("versions")
         d.update(self.versions)
+        d.pop("intraday")
+        d.update({f"orb_{k}": v for k, v in self.intraday.items()})
         d["cost_estimate_total"] = sum(self.cost_estimate.values())
         d["cost_actual_total"] = sum(self.cost_actual.values())
         d["cost_actual_over_risk"] = d["cost_actual_total"] / self.initial_risk_usd
@@ -371,6 +384,8 @@ def close_trade(
         slippage_bps=outcome.signal.params.slippage_bps,
         fx_rate=costs.fx_rate,
         fx_mode=costs.fx_mode,
+        entry_model=getattr(outcome, "model", DAILY_MODEL),
+        intraday=outcome.intraday_fields() if hasattr(outcome, "intraday_fields") else {},
         versions={
             **VERSIONS,
             **{
@@ -423,10 +438,17 @@ def run_ticker(
     trigger: TriggerParams | None = None,
     exits: ExitParams | None = None,
     registry: SetupRegistry | None = None,
+    minute_bars: MinuteBarsLoader | None = None,
+    orb: OrbParams | None = None,
 ) -> tuple[list[Trade], list[Rejection], SetupRegistry]:
     """Replay one ticker's as-traded series bar by bar: exits for the open position first
     (§6.1), then at most one new entry. The approver must return an object with
-    ``approved``, ``reason``, ``shares``, ``actual_risk`` (3d's RiskDecision)."""
+    ``approved``, ``reason``, ``shares``, ``actual_risk`` (3d's RiskDecision).
+
+    ``minute_bars(ticker, date)`` switches the entry model to ``orb_entry`` (3e): it returns
+    the session's minute bars (with ``in_session``) or None (-> ``no_minute_bars``). The
+    same candidate days, levels, registry, approver and daily exits from T+1 are used, so
+    the two models are comparable one to one."""
     tp = trigger or TriggerParams()
     xp = exits or ExitParams()
     reg = registry or SetupRegistry()
@@ -471,7 +493,23 @@ def run_ticker(
                 Rejection(ticker, d, dec.key[1], "levels", f"{LEVELS_UNAVAILABLE}: {e}")
             )
             continue
-        out = evaluate_day(sig, o[i], h[i], lo_[i])
+        if minute_bars is None:
+            out = evaluate_day(sig, o[i], h[i], lo_[i])
+        else:
+            from tradingbot.data.intraday import session_bars, session_bounds
+
+            mb = minute_bars(ticker, d)
+            if mb is None or len(mb) == 0:
+                reg.record_no_fill(dec.key, d, NO_MINUTE_BARS)
+                rejections.append(Rejection(ticker, d, dec.key[1], "intraday", NO_MINUTE_BARS))
+                continue
+            so, sc = session_bounds(d)
+            bars = session_bars(mb) if "in_session" in mb.columns else mb
+            out = simulate_orb_day(sig, bars, so, sc, orb)
+            if not np.isnan(out.first_open) and abs(out.first_open / o[i] - 1) > (
+                (orb or OrbParams()).open_mismatch_tol
+            ):
+                out = replace_detail(out, f"open_mismatch daily={o[i]:.4g}; {out.detail}")
         if out.code != FILL_CANDIDATE:
             approve_and_record(reg, out, False, out.code)
             rejections.append(Rejection(ticker, d, dec.key[1], "trigger", out.code))
@@ -502,6 +540,14 @@ def run_ticker(
             pos.closed, pos.exit_reason, pos.exit_date = True, AMBIGUOUS_SAME_DAY, d
             trades.append(close_trade(pos, ticker=ticker, costs=costs, **ctx))
             pos = None
+        elif getattr(out, "stopped_intraday", False):
+            # ORB: unambiguous stop in a later minute bar on the entry day. Close in the
+            # registry here (3c only closes ambiguous fills) before the next session.
+            _sell(pos, d, "exit", pos.shares, float(out.stop_ref), slip, costs)
+            pos.closed, pos.exit_reason, pos.exit_date = True, STOP_INTRADAY, d
+            reg.record_close(pos.key, d, STOP_INTRADAY)
+            trades.append(close_trade(pos, ticker=ticker, costs=costs, **ctx))
+            pos = None
     if pos is not None:
         trades.append(
             close_trade(
@@ -509,6 +555,12 @@ def run_ticker(
             )
         )
     return trades, rejections, reg
+
+
+def replace_detail(out, detail: str):
+    from dataclasses import replace
+
+    return replace(out, detail=detail)
 
 
 # --- reporting ----------------------------------------------------------------------------------
@@ -560,5 +612,9 @@ def summarize(trades: list[Trade], rejections: list[Rejection]) -> dict[str, Any
         "ambiguous_same_day": sum(t.ambiguous_same_day for t in trades),
         "partial_skipped": sum(t.partial_skipped for t in trades),
         "rejections": {str(k): int(v) for k, v in rej.items()},
+        "entry_models": {
+            str(k): int(v)
+            for k, v in pd.Series([t.entry_model for t in trades]).value_counts().items()
+        },
         "versions": VERSIONS,
     }

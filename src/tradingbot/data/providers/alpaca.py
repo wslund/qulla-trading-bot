@@ -1,4 +1,4 @@
-"""Alpaca Market Data API v2 adapter (historical daily bars only; no trading endpoints).
+"""Alpaca Market Data API v2 adapter (historical daily and minute bars; no trading endpoints).
 
 Endpoint: GET https://data.alpaca.markets/v2/stocks/{symbol}/bars
 Auth headers: APCA-API-KEY-ID / APCA-API-SECRET-KEY, read from ALPACA_API_KEY and
@@ -10,6 +10,12 @@ With adjustment=raw the bars are as traded, so price_basis=as_traded. Alpaca's b
 no split or dividend columns, so split_ratio, dividend, adj_close and adj_factor are NaN
 ("unknown") and the series cannot be rebased to another basis. Alpaca's own adjustment
 options (split, dividend, all) are not used in the pilot; see docs/DATA_PILOT.md §3.
+
+Minute bars (``fetch_minute``): timeframe=1Min, same feed/adjustment, one session per call
+with start/end = the XNYS session's open .. close + 1 min in UTC. Alpaca returns every bar
+it has in the window, which for older dates can be the whole UTC day; the session filter is
+applied downstream (data.intraday). Rate-limit headers (X-RateLimit-*) of the last response
+are kept in ``last_rate_limit`` for diagnostics; 429 is retried with Retry-After.
 """
 
 from __future__ import annotations
@@ -65,6 +71,7 @@ class AlpacaProvider(MarketDataProvider):
         self.max_retries = max_retries
         self._sleep = sleep
         self._now = now
+        self.last_rate_limit: dict[str, str] = {}
 
     def effective_end(self, end: date) -> tuple[date, str]:
         """Cap ``end`` to the last New York date strictly before today (New York time).
@@ -101,19 +108,55 @@ class AlpacaProvider(MarketDataProvider):
         }
         if self.asof:
             params["asof"] = self.asof
+        frame, _pages = self._paginate(ticker, params)
+        version = f"alpaca v2 bars feed={self.feed} adjustment={self.adjustment}"
+        return RawBars(self.name, ticker, frame, provider_version=version, notes=note)
+
+    def fetch_minute(self, ticker: str, session_date: date) -> RawBars:
+        """All 1Min bars Alpaca has for one XNYS session window (open .. close + 1 min, UTC).
+
+        Raises for a non-session date. ``notes`` records the window and the page count;
+        the raw frame is stored append-only by the caller (data.intraday.IntradayStore).
+        """
+        from tradingbot.data.intraday import fetch_window
+
+        if not self.api_key or not self.secret_key:
+            raise AlpacaError("ALPACA_API_KEY / ALPACA_SECRET_KEY not set")
+        start, end = fetch_window(session_date)
+        capped, note = self.effective_end(session_date)
+        if capped != session_date:
+            raise AlpacaError(f"minute bars for {session_date} not available yet: {note}")
+        params = {
+            "timeframe": "1Min",
+            "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "limit": 10000,
+            "adjustment": self.adjustment,
+            "feed": self.feed,
+            "sort": "asc",
+        }
+        if self.asof:
+            params["asof"] = self.asof
+        frame, pages = self._paginate(ticker, params)
+        version = f"alpaca v2 bars 1Min feed={self.feed} adjustment={self.adjustment}"
+        note = f"window {params['start']}..{params['end']} pages={pages}"
+        return RawBars(self.name, ticker, frame, provider_version=version, notes=note)
+
+    def _paginate(self, ticker: str, params: dict) -> tuple[pd.DataFrame, int]:
         bars: list[dict] = []
         page_token: str | None = None
+        pages = 0
         while True:
             if page_token:
                 params["page_token"] = page_token
             payload = self._get(f"{BASE_URL}/{ticker.upper()}/bars", params)
+            pages += 1
             bars.extend(payload.get("bars") or [])
             page_token = payload.get("next_page_token")
             if not page_token:
                 break
         frame = pd.DataFrame(bars, columns=RAW_COLUMNS + ["n", "vw"]) if bars else pd.DataFrame()
-        version = f"alpaca v2 bars feed={self.feed} adjustment={self.adjustment}"
-        return RawBars(self.name, ticker, frame, provider_version=version, notes=note)
+        return frame, pages
 
     def _get(self, url: str, params: dict) -> dict:
         """GET with retries on 429 (Retry-After) and 5xx; other 4xx raise immediately."""
@@ -127,6 +170,11 @@ class AlpacaProvider(MarketDataProvider):
             req = urllib.request.Request(full, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed host
+                    hdrs = getattr(resp, "headers", None)
+                    if hdrs is not None:
+                        self.last_rate_limit = {
+                            k: v for k, v in hdrs.items() if k.lower().startswith("x-ratelimit")
+                        }
                     return json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", errors="replace")[:200]
