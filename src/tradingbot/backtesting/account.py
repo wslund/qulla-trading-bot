@@ -307,8 +307,8 @@ class Account:
     def apply_split(
         self, ticker: str, ratio: float, open_price: float, on: date, phase: str = "open"
     ) -> list[LedgerEvent]:
-        """§7.1 step 1–3: holding × r (fraction sold as cash in lieu at ``open_price``),
-        entry/mark ÷ r, this ticker's reservation re-expressed (amount unchanged)."""
+        """§7.1 step 1–2: holding × r (fraction sold as cash in lieu at ``open_price``),
+        entry/mark ÷ r. Same-day entry reservations are already in T units and untouched."""
         if ratio == 1.0:
             return []
         if not ratio > 0:
@@ -357,27 +357,8 @@ class Account:
                     f"ratio {ratio}: {h.shares} -> {whole}",
                 )
             )
-        for key, res in list(self.reservations.items()):
-            if res.ticker == ticker:
-                self.reservations[key] = replace(
-                    res,
-                    shares_ordered=math.floor(res.shares_ordered * ratio + 1e-9),
-                    fill_est=res.fill_est / ratio,
-                )
-                events.append(
-                    self._event(
-                        on,
-                        phase,
-                        "split_reservation",
-                        ticker,
-                        self.reservations[key].shares_ordered,
-                        self.reservations[key].fill_est,
-                        0.0,
-                        0.0,
-                        0.0,
-                        f"ratio {ratio}, amount unchanged",
-                    )
-                )
+        # Reservations are NOT rewritten: they live one session and their plan already is in
+        # day-T units (compute_levels divides by split_ratio[T]; PORTFOLIO_DESIGN §7.1 step 3).
         return events
 
     # --- mark-to-market --------------------------------------------------------------------------

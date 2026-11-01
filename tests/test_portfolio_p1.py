@@ -272,13 +272,13 @@ def test_split_keeps_equity_and_pays_cash_in_lieu() -> None:
         a.apply_split("AAA", float("nan"), 14.0, D0)
 
 
-def test_split_rewrites_pending_reservation_without_changing_amount() -> None:
+def test_split_leaves_same_day_reservation_untouched() -> None:
+    """A reservation is made in PRE_OPEN from levels already expressed in day-T units
+    (compute_levels divides by split_ratio[T]), so the OPEN-phase split must not touch it."""
     a = acct()
     res = reserve(a, shares=10, fill_est=40.0)
-    a.apply_split("AAA", 4.0, 10.0, D0)
-    r = a.reservations[KEY]
-    assert r.shares_ordered == 40 and r.fill_est == pytest.approx(10.0)
-    assert r.amount_usd == res.amount_usd and a.reserved_usd == pytest.approx(res.amount_usd)
+    assert a.apply_split("AAA", 4.0, 10.0, D0) == []
+    assert a.reservations[KEY] == res and a.reserved_usd == pytest.approx(res.amount_usd)
     check_identities(a)
 
 
