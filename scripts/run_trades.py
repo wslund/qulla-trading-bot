@@ -3,6 +3,8 @@
 uv run python scripts/run_trades.py --source alpaca --splits-from yahoo --tickers AAPL MSFT
 uv run python scripts/run_trades.py --source yahoo --tickers AAPL --equity-sek 200000 --risk 0.01 \\
     --slippage 20 --commission fixed --fx-mode usd_balance
+uv run python scripts/run_trades.py --source alpaca --splits-from yahoo --tickers AAPL \\
+    --entry-model orb
 
 Pilot data has no point-in-time universe: the output is a function test of the pipeline,
 never evidence of edge. Results are written to data/trades/<source>/<run>.{trades,rejections}
@@ -25,12 +27,14 @@ from tradingbot.backtesting.trades import (
     summarize,
     trades_frame,
 )
+from tradingbot.data.intraday import IntradayStore
 from tradingbot.data.store import ParquetStore
 from tradingbot.risk.costs import IBKR_FIXED, IBKR_TIERED, CostParams
 from tradingbot.risk.sizing import RiskApprover, RiskParams, account_from_sek
 from tradingbot.scanner.features import attach_splits
 from tradingbot.scanner.pipeline import build_candidates, read_candidates
 from tradingbot.signals.daily_trigger import TriggerParams
+from tradingbot.signals.orb import OrbParams
 from tradingbot.signals.state import SetupRegistry
 
 
@@ -45,6 +49,13 @@ def main() -> None:
     ap.add_argument("--commission", choices=["tiered", "fixed"], default="tiered")
     ap.add_argument("--fx-mode", choices=["usd_balance", "per_trade"], default="per_trade")
     ap.add_argument("--max-cost-to-risk", type=float, default=0.25)
+    ap.add_argument(
+        "--entry-model",
+        choices=["daily", "orb"],
+        default="daily",
+        help="orb needs minute bars from scripts/fetch_minute.py (latest fetch per day)",
+    )
+    ap.add_argument("--orb-minutes", type=int, default=5)
     ap.add_argument("--data-dir", type=Path, default=Path("data"))
     args = ap.parse_args()
 
@@ -57,6 +68,8 @@ def main() -> None:
     approver = RiskApprover(account_from_sek(args.equity_sek, costs), risk, costs)
     trigger = TriggerParams(slippage_bps=args.slippage)
     registry = SetupRegistry()
+    istore = IntradayStore(args.data_dir)
+    minute_bars = istore.read_latest if args.entry_model == "orb" else None
     trades, rejections = [], []
     for ticker in args.tickers:
         series = store.read_processed(args.source, ticker)
@@ -75,6 +88,8 @@ def main() -> None:
             trigger=trigger,
             exits=ExitParams(),
             registry=registry,
+            minute_bars=minute_bars,
+            orb=OrbParams(orb_minutes=args.orb_minutes),
         )
         trades += t
         rejections += r
@@ -117,6 +132,7 @@ def main() -> None:
     if trades:
         cols = [
             "ticker",
+            "entry_model",
             "entry_date",
             "shares",
             "entry_fill",

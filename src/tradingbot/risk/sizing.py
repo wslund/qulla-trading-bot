@@ -109,6 +109,23 @@ def position_size(
 
 
 @dataclass(frozen=True)
+class OrderPlan:
+    """What the ORDER is sized on (stage 1): the estimated fill and the stop reference known
+    when the order is placed. daily_stop_entry: level × (1+slip) and max(low[T−1], ADR cap);
+    orb_entry: trigger × (1+slip) and max(opening-range low, ADR cap). An outcome may carry
+    its own plan (``outcome.plan``); otherwise the daily formulas are used."""
+
+    fill_est: float
+    stop_plan: float
+    model: str = "daily_stop_entry"
+
+
+def daily_order_plan(sig, slip: float) -> OrderPlan:
+    fill_est = sig.breakout_level * (1 + slip)
+    return OrderPlan(fill_est, max(sig.low_prev, fill_est * (1 - sig.adr20)))
+
+
+@dataclass(frozen=True)
 class RiskDecision:
     """Structured approval/rejection of one FillCandidate. Satisfies 3c's ``Approval``."""
 
@@ -173,9 +190,15 @@ def _reject(
 
 
 def assess_fill(
-    outcome: TriggerOutcome, account: Account, risk: RiskParams, costs: CostParams
+    outcome: TriggerOutcome,
+    account: Account,
+    risk: RiskParams,
+    costs: CostParams,
+    plan: OrderPlan | None = None,
 ) -> RiskDecision:
-    """Stage 1 + 2 + capital + cost_to_risk on an assumed fill. Pure; see module docstring."""
+    """Stage 1 + 2 + capital + cost_to_risk on an assumed fill. Pure; see module docstring.
+
+    ``plan`` (or ``outcome.plan``) overrides the daily stage-1 formulas, e.g. for ORB."""
     sig = outcome.signal
     fc = outcome.fill
     if outcome.code != FILL_CANDIDATE or fc is None:
@@ -190,10 +213,9 @@ def assess_fill(
         )
     slip_bps = sig.params.slippage_bps
     slip = slip_bps / 10_000
-    # Stage 1: the order, sized on the level and the planned stop (bars <= T−1 only).
-    fill_est = sig.breakout_level * (1 + slip)
-    stop_plan = max(sig.low_prev, fill_est * (1 - sig.adr20))
-    order = position_size(account.equity_usd, fill_est, stop_plan, risk)
+    # Stage 1: the order, sized on what was known when it was placed.
+    plan = plan or getattr(outcome, "plan", None) or daily_order_plan(sig, slip)
+    order = position_size(account.equity_usd, plan.fill_est, plan.stop_plan, risk)
     fill, stop = fc.fill_price, fc.stop_price
     if order.shares == 0:
         return _reject(order.reason, 0, order.risk_amount, 0.0, account.cash_usd, fill, stop)

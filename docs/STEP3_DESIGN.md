@@ -172,6 +172,8 @@ Allt enligt RISK_MODEL v0.2; här bara vad som behövs för en ticker i taget (p
 
 Yahoo har ingen användbar minuthistorik (bara ~30 dagar) och ingår inte.
 
+**Uppdatering 2026-11-01 (projektägarens anrop, före 3e-koden):** AAPL 2016-01-04 gav 718 staplar över hela UTC-dygnet (första 09:00Z) och SIVB 2023-03-09 gav 750 staplar från 00:00Z – historiken når alltså dagsdatats start och den avnoterade symbolen nås, men fönstret måste sessionsfiltreras (implementerat, `in_session`). Alla anrop `next_page_token = null`. Rate-limit-headrar läses nu av adaptern; faktiska gränser ännu inte mätta. Frekvensen av sena korrigeringar är fortfarande omätt (`fetch_minute.py --refetch` + `compare_fetches` finns för mätningen).
+
 ## 10. Öppna beslut (måste tas före första körning av 3f)
 
 | # | Beslut | Spec/källa | Typ | Förslag |

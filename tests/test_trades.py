@@ -322,7 +322,7 @@ def test_summary_separates_counterfactual_and_reports_versions() -> None:
     assert summ["realistic"]["n"] == 1 and summ["counterfactual_reduced"]["n"] == 0
     assert summ["realistic"]["exit_reasons"] == {TRAIL: 1}
     assert summ["rejections"].get("key_consumed", 0) >= 1 and summ["partial_skipped"] == 0
-    assert summ["versions"]["trades_version"] == "1" and summ["versions"]["spec_version"] == "0.2.1"
+    assert summ["versions"]["trades_version"] == "2" and summ["versions"]["spec_version"] == "0.2.1"
     frame = trades_frame(trades)
     for col in (
         "spec_version",
