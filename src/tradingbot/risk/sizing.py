@@ -234,7 +234,7 @@ def assess_fill(
     ac = assumed_costs(shares, fill, slip_bps, costs)
     capital = shares * fill + ac.entry_cash_cost
     ctr = ac.total / order.risk_amount
-    if capital > account.cash_usd:
+    if capital > account.cash_usd + 1e-9:  # tolerance: a reservation equal to the need fits
         return _reject(
             INSUFFICIENT_CAPITAL,
             order.shares,

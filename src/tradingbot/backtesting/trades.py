@@ -203,32 +203,47 @@ def step_position(
     slippage_bps: float,
     costs: CostParams,
     exits: ExitParams,
+    phase: str | None = None,
 ) -> None:
     """Apply spec §6.1 steps 1–3 and the close decisions (§8) for one bar AFTER the entry
-    day. ``sma`` is the trailing MA at this close in this bar's share units."""
+    day. ``sma`` is the trailing MA at this close in this bar's share units.
+
+    ``phase`` lets the portfolio engine (P4) run the same rules in three calls per bar –
+    ``"open"`` (pending orders at the open, stop gap), ``"intraday"`` (stop touched),
+    ``"close"`` (decisions for tomorrow) – without a second rule set. ``None`` runs all
+    three at once, exactly as before."""
     if pos.closed:
         raise RuntimeError("step on a closed position")
+    if phase not in (None, "open", "intraday", "close"):
+        raise ValueError(f"unknown phase {phase!r}")
     slip = slippage_bps / 10_000
-    pos.bars_held += 1
-    # 1. open: pending orders from yesterday's close
-    if pos.pending_exit:
-        _sell(pos, d, "exit", pos.shares, open_, slip, costs)
-        pos.closed, pos.exit_reason, pos.exit_date = True, TRAIL, d
-        return
-    if pos.pending_partial:
-        _sell(pos, d, "partial", pos.pending_partial, open_, slip, costs)
-        pos.pending_partial, pos.partial_done, pos.stop = 0, True, pos.entry_fill
-    elif pos.pending_breakeven:
-        pos.pending_breakeven, pos.partial_done, pos.stop = False, True, pos.entry_fill
-    # 2. stop
-    if open_ <= pos.stop:
-        _sell(pos, d, "exit", pos.shares, open_, slip, costs)
-        pos.closed, pos.exit_reason, pos.exit_date = True, STOP_GAP, d
-        return
-    if low <= pos.stop:
-        _sell(pos, d, "exit", pos.shares, pos.stop, slip, costs)
-        pos.closed, pos.exit_reason, pos.exit_date = True, STOP, d
-        return
+    if phase in (None, "open"):
+        pos.bars_held += 1
+        # 1. open: pending orders from yesterday's close
+        if pos.pending_exit:
+            _sell(pos, d, "exit", pos.shares, open_, slip, costs)
+            pos.closed, pos.exit_reason, pos.exit_date = True, TRAIL, d
+            return
+        if pos.pending_partial:
+            _sell(pos, d, "partial", pos.pending_partial, open_, slip, costs)
+            pos.pending_partial, pos.partial_done, pos.stop = 0, True, pos.entry_fill
+        elif pos.pending_breakeven:
+            pos.pending_breakeven, pos.partial_done, pos.stop = False, True, pos.entry_fill
+        # 2a. stop gap at the open
+        if open_ <= pos.stop:
+            _sell(pos, d, "exit", pos.shares, open_, slip, costs)
+            pos.closed, pos.exit_reason, pos.exit_date = True, STOP_GAP, d
+            return
+        if phase == "open":
+            return
+    if phase in (None, "intraday"):
+        # 2b. stop touched during the day
+        if low <= pos.stop:
+            _sell(pos, d, "exit", pos.shares, pos.stop, slip, costs)
+            pos.closed, pos.exit_reason, pos.exit_date = True, STOP, d
+            return
+        if phase == "intraday":
+            return
     # 3. close: decisions for tomorrow's open
     if pos.bars_held == exits.partial_days and not pos.partial_done:
         pos.partial_reached = True
