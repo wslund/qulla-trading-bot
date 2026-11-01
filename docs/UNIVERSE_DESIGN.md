@@ -151,5 +151,9 @@ universe_days      (materialiserad, valfri) date, instrument_id, l1_listed, l2_t
 
 Beslut att fatta före U1 (`[D]`): avnoteringsvärdering per orsak (§3), spin-off-hantering, L2-definition, om L3 stannar i scannern, `instrument_id`-källa (egen surrogat + FIGI). Dessa förs in som D-019– när de tas. Q-002 i DECISIONS uppdateras med hänvisning hit.
 
+## 11. Status och beslut efter U0 (2026-11-01)
+
+U0 implementerat: `data/snapshots.py` + `scripts/snapshot_listings.py` (D-019). Öppna beslut inför U1, formulerade som förslag i `DECISIONS.md`: **D-020** avnoteringsvärdering i fem kategorier där okänt utfall aldrig tyst påverkar huvudresultatet (`unresolved_delisting`), **D-021** T−1-medlemskap för nya köp skilt från corporate actions i befintliga positioner, **D-022** `instrument_id`/tickerintervall/`match_confidence`, **D-023** effektiv tid kontra kunskapstid (`observed_at`). §3:s tabell ska läsas med D-020: "värde 0" gäller bara kategori 4 (verifierat värdelös); allt osäkert går till den olösta gruppen. Kvarstående val före U1-kod: L2-definition (stapel + volym > 0; minsta antal staplar?), om L3 stannar i scannern, spin-off-hantering i `adj_factor`.
+
 ## Versionshistorik
 - 0.1 (2026-11-01): förstudie efter P1–P6/ORB och D-018. Leverantörsuppgifter lästa från Norgate (paketsida), EODHD (artikel om avnoterade), Massive (All Tickers-dokumentation och kunskapsbas), Alpaca (corporate actions-referens), QuantRocket (Sharadar-sidor); Massive-priser via tredjepartssida. Inget verifierat mot faktisk data ännu.
