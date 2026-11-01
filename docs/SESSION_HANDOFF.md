@@ -1,9 +1,9 @@
 # SESSION_HANDOFF
 
-Senast uppdaterad: 2026-11-01 (Claude, D-018 risk vid fyllning). Skrivs över i slutet av varje chatt. Max en sida.
+Senast uppdaterad: 2026-11-01 (Claude, P8-förstudie universum). Skrivs över i slutet av varje chatt. Max en sida.
 
 ## Status
-3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. PORTFOLIO_DESIGN v0.2 mergad (PR #21). P1–P4, P6 mergade (PR #22–#26). Första portföljpilot (16 aktier, 10k, 1 %): 9 affärer, −33,23 USD, slut-equity 9 651 SEK, DD 4,02 %, inga portföljavslag. P5 mergad (PR #27). ORB-portföljpilot: 4 affärer, −12,11 USD, 6 `reservation_exceeded`; MRNA 2026-09-21 `zero_shares` = D-016 (dagsplan 11,86 USD/aktie mot ORB 4,90). **Gren `fix/portfolio-open-risk-at-fill`**: D-018 – faktisk stoprisk kontrolleras vid fyllning (`open_risk_at_fill`, tak = planerad + slack/n från `pre_open`), `risk_audit` i resultat och rapport; överträdelse reproducerad på main (300,19 > 295,24) och stängd; 6 tester (300).
+3a–3f och 3e mergade (PR #14–#20). ORB-pilot (16 aktier, 10k, 1 %): 6 affärer, +9,93 USD, 15 `orb_incomplete` (31/75 öppningsminuter saknas, bl.a. SMCI/CELH) – femminutersregeln behålls. PORTFOLIO_DESIGN v0.2 mergad (PR #21). P1–P4, P6 mergade (PR #22–#26). Första portföljpilot (16 aktier, 10k, 1 %): 9 affärer, −33,23 USD, slut-equity 9 651 SEK, DD 4,02 %, inga portföljavslag. P5 mergad (PR #27). ORB-portföljpilot: 4 affärer, −12,11 USD, 6 `reservation_exceeded`; MRNA 2026-09-21 `zero_shares` = D-016 (dagsplan 11,86 USD/aktie mot ORB 4,90). D-018 mergad (PR #28); båda piloterna omkörda utan ändring (daily 9 affärer −33,23 USD; ORB 4 affärer −12,11 USD; `days_prevented=0`). **Gren `docs/universe-design`**: `docs/UNIVERSE_DESIGN.md` v0.1 – P8-förstudie (fyra lager L1–L4, `instrument_id` + tickerhistorik, avnoteringshantering per orsak, datamodell, kvalitetstester, källjämförelse med lästa priser: Norgate Platinum 630 USD/år, Massive Starter 29 USD/mån `[U]`, EODHD/Sharadar pris ej hittat, stegplan U0–U5). Ingen kod.
 
 ## Senaste beslut
 D-012 acceptanskriterier (§12 oförändrad; pilotresultat = funktionstest), D-013 fyllningspolicy (§4.1, `shares_reduced_at_fill` kontrafaktiskt), D-014 dedupe (key förbrukas permanent, ingen tidsåteraktivering). D-010 fortfarande föreslagen.
