@@ -3,6 +3,7 @@ synthetic rows only (no real instruments)."""
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -299,6 +300,9 @@ def test_parquet_roundtrip_is_lossless_and_immutable(tmp_path):
     assert (d / "manifest.json").exists()
     back = UniverseModel.read(tmp_path, "test-1")
     assert back == m
+    assert (
+        back.checksum() == m.checksum() == json.loads((d / "manifest.json").read_text())["checksum"]
+    )
     with pytest.raises(UniverseModelError):
         m.write(tmp_path)
 

@@ -12,6 +12,13 @@ data/portfolio/<source>/<run_id>/: trades, rejections, reservations, decisions, 
 events, equity_curve (parquet), summary.json and config.json (parameters, args, commit,
 config hash) so a run can be repeated. Nothing is committed to git. Pilot data has no
 point-in-time universe: the report is a function test, never evidence of edge.
+
+--universe pilot (default) = PilotUniverse over the given tickers (every ticker a member on
+every day; results identical to runs before U1B). --universe <version> reads
+data/universe/<version>/ (UniverseModel.write) and gates new orders by membership as of
+T−1 (U1B); --universe-mode evaluation|research decides whether uncertain identifier
+matches are excluded (D-022). No vendor loader exists yet: such a model is hand-built or
+comes from a later step.
 """
 
 from __future__ import annotations
@@ -24,8 +31,10 @@ from tradingbot.backtesting.portfolio import PortfolioParams, run_portfolio
 from tradingbot.backtesting.priority import PriorityParams
 from tradingbot.backtesting.report import render_text, write_run
 from tradingbot.backtesting.trades import ExitParams
+from tradingbot.backtesting.universe import PilotUniverse, PointInTimeUniverse
 from tradingbot.data.intraday import IntradayStore
 from tradingbot.data.store import ParquetStore
+from tradingbot.data.universe_model import UniverseModel
 from tradingbot.risk.costs import IBKR_FIXED, IBKR_TIERED, CostParams
 from tradingbot.risk.limits import LimitParams
 from tradingbot.risk.sizing import RiskParams
@@ -81,6 +90,8 @@ def main(argv: list[str] | None = None) -> Path:
         help="orb needs minute bars from scripts/fetch_minute.py (latest fetch per day)",
     )
     ap.add_argument("--orb-minutes", type=int, default=5)
+    ap.add_argument("--universe", default="pilot", help="pilot | <version under data/universe>")
+    ap.add_argument("--universe-mode", choices=["evaluation", "research"], default="evaluation")
     ap.add_argument("--run-id", default=None, help="default: UTC timestamp + config hash")
     ap.add_argument("--data-dir", type=Path, default=Path("data"))
     args = ap.parse_args(argv)
@@ -106,7 +117,13 @@ def main(argv: list[str] | None = None) -> Path:
     store = ParquetStore(args.data_dir)
     series, cands = load_universe(store, args.source, args.tickers, args.splits_from)
     loader = IntradayStore(args.data_dir).read_latest if args.entry_model == "orb" else None
-    result = run_portfolio(series, cands, params, minute_bars=loader)
+    if args.universe == "pilot":
+        uni = PilotUniverse(series, version=f"pilot-{len(series)}")
+    else:
+        uni = PointInTimeUniverse(
+            UniverseModel.read(args.data_dir, args.universe), mode=args.universe_mode
+        )
+    result = run_portfolio(series, cands, params, minute_bars=loader, universe=uni)
     out = write_run(
         result, args.data_dir / "portfolio" / args.source, run_id=args.run_id, args=vars(args)
     )

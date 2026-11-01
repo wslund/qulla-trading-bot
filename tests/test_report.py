@@ -12,6 +12,7 @@ from tradingbot.backtesting.portfolio import run_portfolio
 from tradingbot.backtesting.report import (
     PORTFOLIO_REASONS,
     STRATEGY_REASONS,
+    UNIVERSE_REASONS,
     build_report,
     classify_rejections,
     render_text,
@@ -124,15 +125,23 @@ def test_zero_trade_run_reports_cleanly() -> None:
 
 def test_rejection_buckets_are_disjoint_and_complete() -> None:
     assert not set(STRATEGY_REASONS) & set(PORTFOLIO_REASONS)
+    assert not set(UNIVERSE_REASONS) & (set(STRATEGY_REASONS) | set(PORTFOLIO_REASONS))
     out = classify_rejections(
         ["no_trigger", "max_positions", "reservation_exceeded", "weird", "no_trigger"]
     )
-    assert out == {
+    assert out == {  # report_version 2: a fourth bucket for universe reasons (U1B)
         "strategy": {"no_trigger": 2},
         "portfolio": {"max_positions": 1, "reservation_exceeded": 1},
+        "universe": {},
         "other": {"weird": 1},
     }
-    assert classify_rejections([]) == {"strategy": {}, "portfolio": {}, "other": {}}
+    assert classify_rejections(["not_in_universe"])["universe"] == {"not_in_universe": 1}
+    assert classify_rejections([]) == {
+        "strategy": {},
+        "portfolio": {},
+        "universe": {},
+        "other": {},
+    }
     res, *_ = _run(
         tickers=("AAA", "BBB", "CCC", "DDD", "EEE"), limits=LimitParams(max_open_positions=2)
     )

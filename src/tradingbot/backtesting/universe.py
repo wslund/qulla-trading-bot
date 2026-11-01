@@ -19,6 +19,7 @@ exists so the engine can get a ``Universe`` without pretending the pilot is poin
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -28,10 +29,11 @@ from tradingbot.data.universe_model import (
     UNCERTAIN,
     CorporateAction,
     Delisting,
+    Issue,
     UniverseModel,
 )
 
-EVALUATION, RESEARCH = "evaluation", "research"
+EVALUATION, RESEARCH, PILOT = "evaluation", "research", "pilot"
 
 
 class UniverseError(ValueError):
@@ -88,6 +90,10 @@ class Universe(Protocol):
 
     def events_for_positions(self, start: date, end: date) -> list[PositionEvent]: ...
 
+    def describe(self) -> dict: ...
+
+    def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]: ...
+
 
 class PilotUniverse:
     """Fixed ticker list = the pilot's survivors. Not point-in-time (D-012)."""
@@ -108,6 +114,20 @@ class PilotUniverse:
 
     def events_for_positions(self, start: date, end: date) -> list[PositionEvent]:
         return []
+
+    def describe(self) -> dict:
+        h = hashlib.sha256("\n".join(self.tickers).encode()).hexdigest()
+        return {
+            "universe_version": self.version,
+            "source": "pilot_list",
+            "mode": PILOT,
+            "checksum": h,
+            "n_instruments": len(self.tickers),
+            "point_in_time": False,
+        }
+
+    def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]:
+        return []  # no listing history to check against
 
 
 HasBar = Callable[[str, date], bool | None]  # (instrument_id, day) -> bar with volume? None=unknown
@@ -221,6 +241,20 @@ class PointInTimeUniverse:
         if len(spans) > 1:
             raise AmbiguousTicker(f"{iid} has {len(spans)} tickers on {asof}")
         return spans[0].ticker if spans else None
+
+    def describe(self) -> dict:
+        return {
+            "universe_version": self.version,
+            "source": f"universe_model:{self.version}",
+            "mode": self.mode,
+            "checksum": self.model.checksum(),
+            "n_instruments": len(self.model.instruments),
+            "point_in_time": True,
+            "model_status": self.model.status(),
+        }
+
+    def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]:
+        return self.model.check_prices(bar_dates, only_given=True)
 
     def delisting_for(self, instrument_id: str) -> Delisting | None:
         hits = [d for d in self.model.delistings if d.instrument_id == instrument_id]

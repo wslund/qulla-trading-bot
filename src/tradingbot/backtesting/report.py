@@ -17,6 +17,14 @@ trade in a single-ticker run too) and PORTFOLIO reasons (only the shared account
 refused it). A reason in neither list lands in ``other`` and is printed, never dropped.
 
 Pilot data has no point-in-time universe: every report carries the D-012 note.
+
+Universe (U1B): the ``universe`` section carries version/source/mode/checksum, the D-023
+knowledge gap, data-quality status and the events that reached open positions. When the
+engine marked the run ``valid_for_evaluation = False`` (an open position reached a
+delisting, or the price series contradict the listing intervals) the text report prints a
+block banner and withholds the performance and equity lines; summary.json keeps the
+numbers under ``performance`` but with ``valid_for_evaluation: false`` beside them, and the
+equity curve carries the same flag on every row.
 """
 
 from __future__ import annotations
@@ -36,7 +44,7 @@ import pandas as pd
 from tradingbot.backtesting.portfolio import PortfolioResult, rejections_frame
 from tradingbot.backtesting.trades import trades_frame
 
-REPORT_VERSION = "1"
+REPORT_VERSION = "2"  # 2: universe section + valid_for_evaluation (U1B)
 D012_NOTE = "funktionstest på pilotdata utan point-in-time-universum (D-012); inte evidens för edge"
 
 STRATEGY_REASONS = (
@@ -69,17 +77,20 @@ PORTFOLIO_REASONS = (
     "not_prioritized",
     "duplicate_reservation",
 )
+UNIVERSE_REASONS = ("not_in_universe",)
 
 
 def classify_rejections(reasons: list[str]) -> dict[str, dict[str, int]]:
     counts = pd.Series(reasons, dtype=object).value_counts() if reasons else pd.Series(dtype=int)
-    out = {"strategy": {}, "portfolio": {}, "other": {}}
+    out = {"strategy": {}, "portfolio": {}, "universe": {}, "other": {}}
     for reason, n in counts.items():
         bucket = (
             "strategy"
             if reason in STRATEGY_REASONS
             else "portfolio"
             if reason in PORTFOLIO_REASONS
+            else "universe"
+            if reason in UNIVERSE_REASONS
             else "other"
         )
         out[bucket][str(reason)] = int(n)
@@ -144,6 +155,9 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
             "state",
         ]
     ].copy()
+    ua = result.universe_audit or {}
+    valid = bool(ua.get("valid_for_evaluation", True))
+    equity_curve["valid_for_evaluation"] = valid
     utilization = {
         "sessions": int(len(rows)),
         "sessions_with_position": int((rows["n_positions"] > 0).sum()) if len(rows) else 0,
@@ -216,6 +230,8 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
             "total_charged": float(acc.commission_usd + acc.fx_usd),
         },
         "performance": {
+            "valid_for_evaluation": valid,
+            "invalid_reasons": list(ua.get("invalid_reasons", [])),
             "all_trades": _trade_stats(trades),
             "realistic": _trade_stats(realistic),
             "counterfactual_reduced": _trade_stats([t for t in trades if t.shares_reduced_at_fill]),
@@ -264,12 +280,43 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
             "no_peak och levels_unavailable räknas inte)",
         },
         "orb": result.summary()["orb"],
+        "universe": _universe_section(ua),
         "versions": {
             **result.summary()["versions"],
             "portfolio_version": result.summary()["portfolio"]["portfolio_version"],
         },
     }
     return {"summary": report, "equity_curve": equity_curve}
+
+
+def _universe_section(ua: dict) -> dict[str, Any]:
+    if not ua:
+        return {"universe_version": None, "note": "körning utan universe_audit (före U1B)"}
+    m = ua.get("membership", {})
+    return {
+        "universe_version": ua.get("universe_version"),
+        "source": ua.get("source"),
+        "mode": ua.get("mode"),
+        "checksum": ua.get("checksum"),
+        "point_in_time": ua.get("point_in_time"),
+        "n_instruments": ua.get("n_instruments"),
+        "membership_asof": "T−1 (senast markerade session); L2 via staplar ≤ T−1",
+        "sessions_checked": m.get("sessions_checked"),
+        "knowledge_gap_share": m.get("knowledge_gap_share"),
+        "max_knowledge_gap_share": m.get("max_knowledge_gap_share"),
+        "facts_total": m.get("facts_total"),
+        "facts_observed_after_asof": m.get("facts_observed_after_asof"),
+        "excluded_uncertain": list(m.get("excluded_uncertain", [])),
+        "l2_checked": m.get("l2_checked"),
+        "not_in_universe": ua.get("not_in_universe", 0),
+        "quality": ua.get("quality"),
+        "position_events": [{**e, "date": str(e["date"])} for e in ua.get("position_events", [])],
+        "valid_for_evaluation": ua.get("valid_for_evaluation", True),
+        "invalid_reasons": list(ua.get("invalid_reasons", [])),
+        "note": "U1B: medlemskap styr bara nya order; händelser i öppna positioner observeras "
+        "men exekveras inte (D-021, U3). Olöst avnotering i öppen position gör körningen "
+        "ogiltig för prestandautvärdering (D-024 p. 1).",
+    }
 
 
 def _risk_audit(rows: list[dict]) -> dict[str, Any]:
@@ -330,6 +377,17 @@ def write_run(
         "tickers": sorted(
             {t.ticker for t in result.trades} | {r.ticker for r in result.rejections}
         ),
+        "universe": {
+            k: (result.universe_audit or {}).get(k)
+            for k in (
+                "universe_version",
+                "source",
+                "mode",
+                "checksum",
+                "point_in_time",
+                "instrument_map",
+            )
+        },
         "git_commit": git_commit(),
         "python": platform.python_version(),
         "pandas": pd.__version__,
@@ -376,11 +434,32 @@ def render_text(summary: dict) -> str:
     )
     k, rj, st = summary["costs_usd"], summary["rejections"], summary["stale_marks"]
     cd = summary["candidates"]
+    uni = summary.get("universe", {})
     r = perf["realistic"]
     a = perf["all_trades"]
     f = _fmt
-    lines = [
-        f"== {summary['note']} ==",
+    valid = perf.get("valid_for_evaluation", True)
+    lines = [f"== {summary['note']} =="]
+    if not valid:
+        lines += [
+            "#" * 78,
+            "# EJ GILTIG FÖR PRESTANDAUTVÄRDERING: " + ", ".join(perf.get("invalid_reasons", [])),
+            "# Equity-kurva och affärsstatistik visas inte (D-024 p. 1). Se summary.json",
+            "# 'universe.position_events' och 'universe.quality'.",
+            "#" * 78,
+        ]
+    lines += [
+        f"Universum: {uni.get('universe_version')} ({uni.get('source')}, läge {uni.get('mode')}, "
+        f"point_in_time={uni.get('point_in_time')}, checksum "
+        f"{str(uni.get('checksum'))[:12]}); kunskapsgap "
+        f"{f(uni.get('knowledge_gap_share'), '.0%')} (max "
+        f"{f(uni.get('max_knowledge_gap_share'), '.0%')}), not_in_universe="
+        f"{uni.get('not_in_universe')}, uncertain uteslutna "
+        f"{len(uni.get('excluded_uncertain', []))}, "
+        f"kvalitet {(uni.get('quality') or {}).get('status')}, "
+        f"händelser i positioner {len(uni.get('position_events', []))}",
+    ]
+    perf_lines = [
         f"Insatt: {c['deposit_sek']:.0f} SEK = {c['deposit_usd_gross']:.2f} USD "
         f"@ {c['fx_rate_sek_per_usd']} ({c['fx_rate_note']}), fx_mode={c['fx_mode']}, "
         f"deposit-FX {c['deposit_fx_cost_usd']:.2f} USD",
@@ -398,12 +477,16 @@ def render_text(summary: dict) -> str:
         f"open_at_end={perf['open_at_end']} ambiguous={perf['ambiguous_same_day']} "
         f"partial_skipped={perf['partial_skipped']} förlust>1R={perf['loss_over_1r']}",
         f"Max drawdown {f(perf['max_drawdown_pct'], '.2%')}; exits {perf['exit_reasons']}",
+    ]
+    lines += perf_lines if valid else []
+    lines += [
         f"Utnyttjande: sessioner {u['sessions']}, med position {u['sessions_with_position']}, "
         f"snitt brutto {f(u['mean_gross_exposure_pct'], '.1%')}, max positioner "
         f"{u['max_positions']}, reserverat per kandidatdag snitt "
         f"{f(u['mean_reserved_per_candidate_day_usd'], '.2f')} USD",
         f"Avslag strategi: {rj['strategy']}",
         f"Avslag portfölj: {rj['portfolio']}",
+        f"Avslag universum: {rj.get('universe', {})}",
         f"Avslag övrigt: {rj['other']}",
         f"Gränser som bundit: {lim['binding_counts']}; "
         f"reservation_blocked_fills={lim['reservation_blocked_fills']} "
