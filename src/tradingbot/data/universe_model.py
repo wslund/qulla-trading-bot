@@ -33,6 +33,7 @@ says what was listed in 2026 (see ``from_u0_snapshot`` note).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field, fields
@@ -240,46 +241,76 @@ class UniverseModel:
 
     # --- price reconciliation (UNIVERSE_DESIGN §8 points 2–3) --------------------------------
 
+    def checksum(self) -> str:
+        """sha256 over every row (sorted, JSON with str() for dates): identifies the model
+        content in run configs independently of where it was stored; stable across a
+        Parquet round trip."""
+        h = hashlib.sha256()
+        for name in self.TABLES:
+            rows = (json.dumps(asdict(r), sort_keys=True, default=str) for r in getattr(self, name))
+            for rec in sorted(rows):
+                h.update(rec.encode())
+                h.update(b"\n")
+        return h.hexdigest()
+
     def check_prices(
-        self, bar_dates: dict[str, Iterable[date]], tolerance_sessions: int = 5
+        self,
+        bar_dates: dict[str, Iterable[date]],
+        tolerance_sessions: int = 5,
+        *,
+        only_given: bool = False,
     ) -> list[Issue]:
         """Compare listing intervals with the dates that have price bars, per instrument.
-        FAIL: bars after listed_to + tolerance, or no bar at all for a closed listing.
-        WARN: first bar more than ``tolerance`` sessions after listed_from (register date
-        claims trading that the price source does not show)."""
+        FAIL: more than ``tolerance`` bars before the first listed_from (a series keyed by a
+        reused ticker that carries another instrument's history), more than ``tolerance``
+        bars after a listed_to, or no bar at all for a closed listing. ``only_given``
+        restricts the check to instruments present in ``bar_dates``.
+        WARN: first bar more than 2×tolerance days after a register listed_from (the register
+        claims trading the price source does not show), bars in a gap between two listings."""
         out: list[Issue] = []
+        by_inst: dict[str, list[Listing]] = {}
         for ls in self.listings:
-            dates = sorted(bar_dates.get(ls.instrument_id, []))
+            if only_given and ls.instrument_id not in bar_dates:
+                continue  # judge only the instruments a run actually loaded
+            by_inst.setdefault(ls.instrument_id, []).append(ls)
+        for iid, lss in by_inst.items():
+            lss = sorted(lss, key=lambda r: r.listed_from)
+            dates = sorted(bar_dates.get(iid, []))
+            closed = all(ls.listed_to is not None for ls in lss)
             if not dates:
-                lvl = FAIL if ls.listed_to is not None else WARN
-                out.append(Issue(lvl, "prices", f"{ls.instrument_id}: no price bars"))
+                out.append(Issue(FAIL if closed else WARN, "prices", f"{iid}: no price bars"))
                 continue
-            in_window = [d for d in dates if ls.covers(d)]
-            after = [d for d in dates if ls.listed_to is not None and d > ls.listed_to]
-            if ls.listed_to is not None and len(after) > tolerance_sessions:
+            before = [d for d in dates if d < lss[0].listed_from]
+            if len(before) > tolerance_sessions:
                 out.append(
-                    Issue(FAIL, "prices", f"{ls.instrument_id}: {len(after)} bars after listed_to")
+                    Issue(
+                        FAIL,
+                        "prices",
+                        f"{iid}: {len(before)} bars before listed_from (reused ticker?)",
+                    )
                 )
-            if not in_window:
-                out.append(Issue(FAIL, "prices", f"{ls.instrument_id}: no bars inside listing"))
+            last_to = lss[-1].listed_to
+            after = [d for d in dates if last_to is not None and d > last_to]
+            if len(after) > tolerance_sessions:
+                out.append(Issue(FAIL, "prices", f"{iid}: {len(after)} bars after listed_to"))
+            covered = [d for d in dates if any(ls.covers(d) for ls in lss)]
+            if not covered:
+                out.append(Issue(FAIL, "prices", f"{iid}: no bars inside listing"))
                 continue
-            gap = sum(1 for d in dates if ls.listed_from <= d < in_window[0])
-            first_offset = (in_window[0] - ls.listed_from).days
-            if (
-                ls.listed_from_source == REGISTER
-                and first_offset > tolerance_sessions * 2
-                and gap == 0
-            ):
+            in_gap = len(dates) - len(covered) - len(before) - len(after)
+            if in_gap > tolerance_sessions:
+                out.append(Issue(WARN, "prices", f"{iid}: {in_gap} bars between listings"))
+            first = lss[0]
+            first_offset = (covered[0] - first.listed_from).days
+            if first.listed_from_source == REGISTER and first_offset > tolerance_sessions * 2:
                 out.append(
                     Issue(
                         WARN,
                         "prices",
-                        f"{ls.instrument_id}: first bar {first_offset} days after listed_from",
+                        f"{iid}: first bar {first_offset} days after listed_from",
                     )
                 )
         return out
-
-    # --- persistence ----------------------------------------------------------------------------
 
     TABLES = (
         "instruments",
@@ -302,6 +333,7 @@ class UniverseModel:
             json.dumps(
                 {"universe_version": self.version, "model_version": UNIVERSE_MODEL_VERSION,
                  "rows": {n: len(getattr(self, n)) for n in self.TABLES}, "status": self.status(),
+                 "checksum": self.checksum(),
                  "notes": self.notes},
                 indent=2, ensure_ascii=False,
             ),

@@ -24,6 +24,20 @@ Cash freed by exits on T is not usable for entries on T: reservations were made 
 PRE_OPEN against the T−1 account (D-016). Sizing uses equity at close T−1 (RISK_MODEL
 §2.1.1). The exit rules are 3f's, unchanged; the account only mirrors the legs 3f produces.
 Only ``daily_stop_entry`` here; ORB is P5.
+
+Universe (U1 step B, D-021–D-024): ``universe`` decides which instruments may receive *new*
+orders. In PRE_OPEN of session T the engine asks ``universe.members(asof)`` with ``asof`` =
+the last marked session (T−1), so membership – and the L2 "has a bar" check inside it –
+never reads anything from day T. A candidate whose instrument is not a member is rejected
+``not_in_universe`` (stage ``universe``) and its setup key stays ARMED. Series are keyed by
+the data layer's symbol; each symbol is resolved once to a stable ``instrument_id`` (the
+instrument that owned the ticker on the series' last bar date, or ``instrument_ids`` given
+explicitly); an ambiguous or unresolvable symbol raises instead of being guessed.
+Events that touch *open* positions (``events_for_positions``) are only observed here: a
+delisting reached by an open position is logged and marks the run
+``valid_for_evaluation = False`` (``unresolved_delisting`` when the D-020 category is
+unknown, otherwise ``delisting_not_executed``); nothing is sold or written down (U3).
+Default ``PilotUniverse(series keys)`` reproduces every earlier pilot run exactly.
 """
 
 from __future__ import annotations
@@ -59,6 +73,7 @@ from tradingbot.backtesting.trades import (
     summarize,
 )
 from tradingbot.backtesting.trades import apply_split as split_position
+from tradingbot.backtesting.universe import PilotUniverse, Universe, UniverseError
 from tradingbot.data.intraday import session_bars, session_bounds
 from tradingbot.risk.costs import CostParams
 from tradingbot.risk.limits import LimitParams, LossState
@@ -76,8 +91,12 @@ from tradingbot.signals.daily_trigger import (
 from tradingbot.signals.orb import NO_MINUTE_BARS, STOP_INTRADAY, OrbParams, simulate_orb_day
 from tradingbot.signals.state import Reason, SetupRegistry
 
-PORTFOLIO_VERSION = "3"  # 3: actual stop risk checked at fill (D-018)
+PORTFOLIO_VERSION = "4"  # 3: actual stop risk at fill (D-018); 4: universe membership (U1B)
 OPEN_RISK_AT_FILL = "open_risk_at_fill"
+NOT_IN_UNIVERSE = "not_in_universe"
+UNRESOLVED_DELISTING = "unresolved_delisting"
+DELISTING_NOT_EXECUTED = "delisting_not_executed"
+QUALITY_FAIL = "universe_quality_fail"
 DAILY = "daily"
 ORB = "orb"
 MinuteBarsLoader = Callable[[str, date], "pd.DataFrame | None"]
@@ -139,6 +158,7 @@ class PortfolioResult:
     candidate_stats: dict[str, Any] = field(default_factory=dict)  # input candidate rows/days
     orb_attempts: list[dict] = field(default_factory=list)  # one row per reserved ORB order
     risk_audit: list[dict] = field(default_factory=list)  # per session: budget vs actual risk
+    universe_audit: dict[str, Any] = field(default_factory=dict)  # U1B: membership/quality
 
     def ledger_frame(self) -> pd.DataFrame:
         return self.account.ledger.rows_frame()
@@ -186,6 +206,12 @@ class PortfolioResult:
             "candidates": self.candidate_stats,
         }
         s["orb"] = orb_stats(self.orb_attempts)
+        s["universe"] = self.universe_audit
+        if self.universe_audit:
+            s["versions"] = {
+                **s["versions"],
+                "universe_version": self.universe_audit.get("universe_version"),
+            }
         return s
 
 
@@ -196,19 +222,54 @@ def run_portfolio(
     *,
     registry: SetupRegistry | None = None,
     minute_bars: MinuteBarsLoader | None = None,
+    universe: Universe | None = None,
+    instrument_ids: dict[str, str] | None = None,
 ) -> PortfolioResult:
     """Replay all tickers through one account. ``series``/``cands`` map ticker -> frames as
     produced by the data layer and the scanner (as-traded, with split_ratio).
 
     ``entry_model="orb"`` (P5) needs ``minute_bars(ticker, date)`` returning the session's
     minute bars (with ``in_session``) or None. The reservation in PRE_OPEN is still made on
-    the daily plan (D-016); at 09:35 ET the ORB plan sizes the order within it."""
+    the daily plan (D-016); at 09:35 ET the ORB plan sizes the order within it.
+
+    ``universe`` (default ``PilotUniverse(series keys)``) gates new orders by membership as of
+    T−1; ``instrument_ids`` maps series keys to instrument ids when the universe cannot
+    resolve them by itself (see module docstring)."""
     p = params or PortfolioParams()
     if p.entry_model == ORB and minute_bars is None:
         raise ValueError("entry_model='orb' needs a minute_bars loader")
     reg = registry or SetupRegistry()
     tickers = sorted(series)
     data = {t: _TickerData(series[t], cands.get(t)) for t in tickers}
+    uni: Universe = universe if universe is not None else PilotUniverse(tickers)
+    iid_of = _resolve_instruments(uni, data, instrument_ids)
+    quality = uni.quality({iid_of[t]: data[t].dates for t in tickers})
+    audit_u: dict[str, Any] = {
+        **uni.describe(),
+        "instrument_map": dict(sorted(iid_of.items())),
+        "membership": {
+            "sessions_checked": 0,
+            "facts_total": 0,
+            "facts_observed_after_asof": 0,
+            "knowledge_gap_share": None,
+            "max_knowledge_gap_share": None,
+            "excluded_uncertain": [],
+            "l2_checked": None,
+        },
+        "not_in_universe": 0,
+        "quality": {
+            "status": "FAIL"
+            if any(i.level == "FAIL" for i in quality)
+            else ("WARN" if quality else "OK"),
+            "issues": [asdict(i) for i in quality],
+        },
+        "position_events": [],
+        "valid_for_evaluation": True,
+        "invalid_reasons": [],
+    }
+    if audit_u["quality"]["status"] == "FAIL":
+        audit_u["valid_for_evaluation"] = False
+        audit_u["invalid_reasons"].append(QUALITY_FAIL)
     start = min(d.dates[0] for d in data.values())
     end = max(d.dates[-1] for d in data.values())
     clock = SessionClock(start, end)
@@ -237,6 +298,7 @@ def run_portfolio(
         asof = account.last_mark_date
         equity_prev = account.equity_usd  # close T−1 (RISK_MODEL §2.1.1)
         orders: dict[str, _Order] = {}
+        member_ids: set[str] | None = None  # membership as of T−1, fetched once per session
 
         # ---------------- PRE_OPEN ----------------
         candidates: list[Candidate] = []
@@ -252,6 +314,13 @@ def run_portfolio(
                             t, T, dec.key[1] if dec.key else None, "registry", dec.reason.value
                         )
                     )
+                continue
+            if member_ids is None:
+                member_ids = _membership(uni, asof, audit_u["membership"])
+            if iid_of[t] not in member_ids:
+                reg.record_no_fill(dec.key, T, NOT_IN_UNIVERSE)  # key stays ARMED
+                rejections.append(Rejection(t, T, dec.key[1], "universe", NOT_IN_UNIVERSE))
+                audit_u["not_in_universe"] += 1
                 continue
             try:
                 sig = build_signal(dec, compute_levels(data[t].series, row), p.trigger)
@@ -530,6 +599,34 @@ def run_portfolio(
         loss_states.append(loss)
         account.state = loss.state
         account.ledger.close_session(account, session)
+        # D-021: events on instruments we still hold are observed, not acted on (U3).
+        if open_pos:
+            held = {iid_of[t]: t for t in open_pos}
+            for ev in uni.events_for_positions(T, T):
+                if ev.instrument_id not in held:
+                    continue
+                t = held[ev.instrument_id]
+                rowu = {
+                    "date": T,
+                    "ticker": t,
+                    "instrument_id": ev.instrument_id,
+                    "kind": ev.kind,
+                    "category": ev.category,
+                    "value_per_share": ev.value_per_share,
+                    "shares_held": int(open_pos[t].pos.shares),
+                    "mark": float(account.holdings[t].mark) if t in account.holdings else None,
+                }
+                audit_u["position_events"].append(rowu)
+                events.append({"date": T, "ticker": t, "event": f"universe_{ev.kind}"})
+                if ev.kind == "delisting":
+                    reason = (
+                        UNRESOLVED_DELISTING
+                        if ev.category in (None, "unknown")
+                        else DELISTING_NOT_EXECUTED
+                    )
+                    audit_u["valid_for_evaluation"] = False
+                    if reason not in audit_u["invalid_reasons"]:
+                        audit_u["invalid_reasons"].append(reason)
 
     for t in sorted(open_pos):
         o = open_pos[t]
@@ -543,6 +640,9 @@ def run_portfolio(
                 **o.ctx,
             )
         )
+    m = audit_u["membership"]
+    if m["facts_total"]:
+        m["knowledge_gap_share"] = m["facts_observed_after_asof"] / m["facts_total"]
     return PortfolioResult(
         trades,
         rejections,
@@ -556,6 +656,7 @@ def run_portfolio(
         cand_stats,
         orb_attempts,
         risk_audit,
+        audit_u,
     )
 
 
@@ -632,6 +733,53 @@ def _close(
     del open_pos[t]
     if t in account.holdings:
         raise RuntimeError(f"{t}: position closed in 3f but shares remain in the account")
+
+
+def _resolve_instruments(
+    uni: Universe, data: dict[str, _TickerData], given: dict[str, str] | None
+) -> dict[str, str]:
+    """Series key (data-layer symbol) -> stable instrument_id. The symbol is resolved on the
+    series' last bar date; ambiguity raises (AmbiguousTicker), an unresolvable symbol raises,
+    two series on one instrument raise. Nothing is guessed (D-022)."""
+    out: dict[str, str] = {}
+    for t, d in data.items():
+        if given and t in given:
+            iid = given[t]
+        else:
+            iid = uni.instrument_for(t, d.dates[-1])
+        if iid is None:
+            raise UniverseError(
+                f"{t}: no instrument owns this ticker on {d.dates[-1]} in universe "
+                f"{uni.version}; pass instrument_ids explicitly"
+            )
+        out[t] = iid
+    seen: dict[str, str] = {}
+    for t, iid in out.items():
+        if iid in seen:
+            raise UniverseError(f"{seen[iid]} and {t} both map to instrument {iid}")
+        seen[iid] = t
+    return out
+
+
+def _membership(uni: Universe, asof: date, stats: dict[str, Any]) -> set[str]:
+    """Members as of ``asof`` (= T−1 close); aggregates D-023 knowledge-gap counts."""
+    ms = uni.members(asof)
+    stats["sessions_checked"] += 1
+    if ms.facts_total is not None:
+        stats["facts_total"] += ms.facts_total
+        stats["facts_observed_after_asof"] += ms.knowledge_gap or 0
+        share = (ms.knowledge_gap or 0) / ms.facts_total if ms.facts_total else 0.0
+        prev = stats["max_knowledge_gap_share"]
+        stats["max_knowledge_gap_share"] = share if prev is None else max(prev, share)
+    for iid in ms.excluded_uncertain:
+        if iid not in stats["excluded_uncertain"]:
+            stats["excluded_uncertain"].append(iid)
+    if ms.members:
+        known = all(m.tradable_known for m in ms.members)
+        stats["l2_checked"] = (
+            known if stats["l2_checked"] is None else (stats["l2_checked"] and known)
+        )
+    return {m.instrument_id for m in ms.members}
 
 
 def _no_bar_outcome(sig):
