@@ -24,6 +24,17 @@ Sources:
   pipe-delimited, trailer ``File Creation Time: MMDDYYYYHH:MM``). Current listings only.
 - Alpaca ``GET /v2/assets?asset_class=us_equity`` (trading API, paper or live host). Keys
   from the environment / ``.env``; never written anywhere. Current assets only.
+- Massive (formerly Polygon) ``GET /v3/reference/tickers?market=stocks&date=…&active=…``
+  (U2B-FREE-1): the tickers that were active, and separately those already inactive, on an
+  *effective date*; paginated via ``next_url`` (1 000 rows a page), all pages kept raw. Basic
+  plan: 5 calls/min, 2 years of reference history – the fetcher sleeps between calls
+  (``min_interval``, injectable). The key goes in the ``Authorization: Bearer`` header only;
+  any ``apiKey`` query parameter is stripped from URLs before they are stored. These lists are
+  labelled ``effective_dated_reconstructed`` (D-023, D-024 p. 2): Massive returns "the record
+  as it maintains it now" for a past date, so ``effective_date`` (what the list is about),
+  ``fetched_at`` (when we fetched it) and the rows' ``last_updated_utc`` (Massive's own
+  update time) are three different things and are never conflated with a verified
+  point-in-time snapshot.
 
 HTTP is injected (``http_get``) so tests run offline with fixtures; the default uses urllib
 with retries on 429 (Retry-After) and 5xx, and never retries other 4xx.
@@ -37,10 +48,11 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 SNAPSHOT_VERSION = "1"
@@ -51,6 +63,11 @@ NASDAQ_FILES = {
     "otherlisted.txt": "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt",
 }
 ALPACA_HOSTS = {"paper": "https://paper-api.alpaca.markets", "live": "https://api.alpaca.markets"}
+MASSIVE_HOST = "https://api.massive.com"
+MASSIVE_SOURCE = "massive_tickers"
+MASSIVE_LABEL = "effective_dated_reconstructed"
+MASSIVE_MIN_INTERVAL = 12.0  # seconds between calls: Basic plan allows 5 calls per minute
+MASSIVE_MAX_PAGES = 200  # safety stop per list (~200 000 rows); never silently truncates
 TRAILER_RE = re.compile(r"^File Creation Time:\s*(\d{10}:\d{2})")
 
 HttpResponse = tuple[int, dict[str, str], bytes]
@@ -108,6 +125,7 @@ class Manifest:
     pages: int = 0
     notes: str = ""
     snapshot_version: str = SNAPSHOT_VERSION
+    extra: dict = field(default_factory=dict)  # source-specific facts (U2B-FREE-1: Massive)
 
     @property
     def sha256_combined(self) -> str:
@@ -284,6 +302,186 @@ def snapshot_alpaca_assets(
     man.status = _status(man.files, payloads)
     d = store.new_dir(source, fetched_at)
     return store.write(d, man, payloads)
+
+
+# --- Massive reference tickers (U2B-FREE-1) --------------------------------------------------
+
+
+def scrub_url(url: str) -> str:
+    """Remove any apiKey query parameter so a URL can be stored or shown. Keeps the rest."""
+    parts = urllib.parse.urlsplit(url)
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+         if k.lower() != "apikey"]  # fmt: skip
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
+
+
+def check_massive_page(data: bytes) -> tuple[bool, int | None, str | None, str | None]:
+    """(complete, record_count, next_url, error) for one /v3/reference/tickers page. A page
+    is complete when it is a JSON object with status OK and a results list."""
+    try:
+        obj = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        return False, None, None, f"not a JSON document: {type(e).__name__}"
+    if not isinstance(obj, dict):
+        return False, None, None, "not a JSON object"
+    if obj.get("status") != "OK":
+        return False, None, None, f"status {obj.get('status')!r}: {obj.get('error') or ''}".strip()
+    results = obj.get("results")
+    if not isinstance(results, list):
+        return False, None, None, "results missing"
+    nxt = obj.get("next_url")
+    return True, len(results), (str(nxt) if nxt else None), None
+
+
+def massive_tickers_url(effective_date: date, active: bool, limit: int = 1000) -> str:
+    q = urllib.parse.urlencode(
+        {
+            "market": "stocks",
+            "date": effective_date.isoformat(),
+            "active": "true" if active else "false",
+            "limit": limit,
+            "order": "asc",
+            "sort": "ticker",
+        }
+    )
+    return f"{MASSIVE_HOST}/v3/reference/tickers?{q}"
+
+
+class _Pacer:
+    """Keeps successive calls at least ``min_interval`` seconds apart (Basic: 5/min)."""
+
+    def __init__(self, min_interval: float, sleep, clock) -> None:
+        self.min_interval, self.sleep, self.clock = min_interval, sleep, clock
+        self.last: float | None = None
+        self.slept = 0.0
+
+    def wait(self) -> None:
+        now = self.clock()
+        if self.last is not None:
+            gap = self.min_interval - (now - self.last)
+            if gap > 0:
+                self.sleep(gap)
+                self.slept += gap
+                now = now + gap
+        self.last = now
+
+
+def snapshot_massive_tickers(
+    store: SnapshotStore,
+    *,
+    effective_date: date,
+    http_get: HttpGet = default_http_get,
+    now: datetime | None = None,
+    api_key: str | None = None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    min_interval: float = MASSIVE_MIN_INTERVAL,
+    limit: int = 1000,
+) -> Path:
+    """Archive Massive's stock ticker lists for ``effective_date``: every page of
+    ``active=true`` (``active_pNNNN.json``) and of ``active=false`` (``inactive_pNNNN.json``),
+    raw. ``active=false`` means *inactive on that date*, not "delisted after it". Status is
+    complete only when both lists reached a page without ``next_url`` and every page parsed;
+    anything else is incomplete (pages kept) or failed. The key is sent in the Authorization
+    header only and never stored; should a response body echo it (e.g. inside ``next_url``)
+    the stored bytes have it replaced by ``REDACTED`` and the page is listed in
+    ``extra.redacted_files`` – the only edit ever made to raw bytes."""
+    key = api_key or os.environ.get("MASSIVE_API_KEY", "")
+    fetched_at = now or datetime.now(UTC)
+    man = Manifest(MASSIVE_SOURCE, fetched_at.isoformat(), FAILED)
+    man.extra = {
+        "label": MASSIVE_LABEL,
+        "effective_date": effective_date.isoformat(),
+        "fetched_at": fetched_at.isoformat(),
+        "min_interval_s": min_interval,
+        "lists": {},
+        "active_count": 0,
+        "inactive_count": 0,
+        "last_updated_utc_min": None,
+        "last_updated_utc_max": None,
+        "redacted_files": [],  # pages where the API key was replaced by REDACTED before storing
+    }
+    man.notes = (
+        "effective-dated list reconstructed by Massive for the requested date; not a verified "
+        "point-in-time snapshot. active=false = inactive on effective_date. Rows keep Massive's "
+        "own fields (ticker, cik, composite_figi, share_class_figi, type, primary_exchange, "
+        "delisted_utc, last_updated_utc) unchanged; FIGI/CIK may be missing or shared."
+    )
+    payloads: dict[str, bytes] = {}
+    if not key:
+        man.files.append(
+            FileRecord(
+                "active_p0001.json", scrub_url(massive_tickers_url(effective_date, True, limit))
+            )
+        )
+        man.files[-1].error = "MASSIVE_API_KEY not set"
+        man.status = FAILED
+        return store.write(store.new_dir(MASSIVE_SOURCE, fetched_at), man, payloads)
+    pacer = _Pacer(min_interval, sleep, clock)
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    lu: list[str] = []
+    for name, active in (("active", True), ("inactive", False)):
+        url: str | None = massive_tickers_url(effective_date, active, limit)
+        pages, rows, finished, err = 0, 0, False, None
+        while url is not None and pages < MASSIVE_MAX_PAGES:
+            pages += 1
+            rec = FileRecord(f"{name}_p{pages:04d}.json", scrub_url(url))
+            pacer.wait()
+            try:
+                status, hdrs, data = http_get(scrub_url(url), headers)
+            except SnapshotError as e:
+                rec.error = err = str(e)
+                man.files.append(rec)
+                break
+            if key.encode() in data:  # a next_url echoing the key: never store it
+                data = data.replace(key.encode(), b"REDACTED")
+                man.extra["redacted_files"].append(rec.name)
+            rec.http_status, rec.bytes = status, len(data)
+            rec.sha256 = hashlib.sha256(data).hexdigest()  # of the stored bytes
+            rec.http_date = _hdr(hdrs, "Date")
+            man.rate_limit.update(
+                {k: v for k, v in hdrs.items() if "ratelimit" in k.lower().replace("-", "")}
+            )
+            ok, n, nxt, perr = check_massive_page(data)
+            rec.complete, rec.record_count, rec.error = ok, n, perr
+            payloads[rec.name] = data
+            man.files.append(rec)
+            if not ok:
+                err = perr
+                break
+            rows += n or 0
+            lu.extend(_last_updated(data))
+            if nxt is None:
+                finished = True
+            url = nxt
+        if url is not None and pages >= MASSIVE_MAX_PAGES and err is None:
+            err = f"stopped after {MASSIVE_MAX_PAGES} pages with next_url still present"
+        man.extra["lists"][name] = {
+            "pages": pages,
+            "rows": rows,
+            "complete": finished and err is None,
+            "error": err,
+        }
+        man.extra[f"{name}_count"] = rows
+    man.pages = sum(v["pages"] for v in man.extra["lists"].values())
+    man.extra["slept_s"] = round(pacer.slept, 3)
+    if lu:
+        man.extra["last_updated_utc_min"], man.extra["last_updated_utc_max"] = min(lu), max(lu)
+    lists_ok = man.extra["lists"] and all(v["complete"] for v in man.extra["lists"].values())
+    man.status = _status(man.files, payloads) if lists_ok else (INCOMPLETE if payloads else FAILED)
+    return store.write(store.new_dir(MASSIVE_SOURCE, fetched_at), man, payloads)
+
+
+def _last_updated(data: bytes) -> list[str]:
+    try:
+        rows = json.loads(data.decode("utf-8")).get("results", [])
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return []
+    return [
+        str(r["last_updated_utc"])
+        for r in rows
+        if isinstance(r, dict) and r.get("last_updated_utc")
+    ]
 
 
 def _status(files: list[FileRecord], payloads: dict[str, bytes]) -> str:

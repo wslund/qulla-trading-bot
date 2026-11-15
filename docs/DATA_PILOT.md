@@ -115,6 +115,10 @@ Metadata beskriver den **lagrade** serien efter sammanslagning: `actual_start`/`
 
 `scripts/snapshot_listings.py` sparar varje hämtning under `data/snapshots/<källa>/<UTC-stämpel>[_n]/` med råbytes oförändrade och `manifest.json` (status `complete`/`incomplete`/`failed`, sha256 per fil och kombinerat, HTTP `Last-Modified`/`Date`, Nasdaqs `File Creation Time`-trailer som leverantörstid, radantal, rate-limit-headrar, fel). Append-only: en katalog skrivs aldrig över; två körningar samma sekund får `_1`. Ofullständiga svar (saknad trailer, fel fältantal, icke-JSON) ger `incomplete` och sparas ändå för felsökning; `complete` kräver att alla filer passerat sin kontroll. U1 får bara läsa `complete`. Schemaläggning: manuell systemd-user-timer enligt skriptets docstring (vardagar 23:30 Stockholm); inget installeras av koden.
 
+### 7.2 Massive (f.d. Polygon) Basic – referenslistor (`data/snapshots/massive_tickers/`)
+
+Används från U2B-FREE-1 enbart för `GET /v3/reference/tickers` (tickerlistor per datum), 0 USD. Dokumenterat hos leverantören (läst 2026-11-15): självbetjäningsplanerna är avsedda för individuellt bruk; Basic ger 5 anrop/min och 2 års referenshistorik; nyckeln kan skickas i `Authorization: Bearer`-header. **Ej verifierat:** om villkoren uttryckligen tillåter lokal lagring av referensdata för eget bruk – projektägaren läser Massives användarvillkor före första riktiga körning och noterar resultatet här. Vi lagrar råsvar lokalt under `data/` (git-ignorerat), publicerar inget, vidaredistribuerar inget och håller takten under gränsen med inbyggd väntan (ingen parallellisering, inget kringgående). Nyckeln i `.env` (`MASSIVE_API_KEY`), aldrig i manifest, loggar, URL:er eller felmeddelanden; ekas den i ett svar ersätts den med `REDACTED` före lagring. Historiska listor märks `effective_dated_reconstructed` och är inte point-in-time (UNIVERSE_DESIGN §9.3).
+
 ## 8. Körlogg
 
 Fylls i av projektägaren efter lokala körningar (nätverk saknas i Claudes miljö).

@@ -158,6 +158,16 @@ universe_days      (materialiserad, valfri) date, instrument_id, l1_listed, l2_t
 - **Spårbarhet:** `identity` i features-/kandidat-`.meta.json`, `universe_audit["identity"]`, rapportens `universe.identity` och `universe.identity_methods`.
 - **Kvar till U2:** när ett historiskt register finns bör importerade serier lagras per `instrument_id` (då är `date_resolved` en kontroll, inte identifieringen); `instrument_id`-kolumn i kandidattabellen; tolerans för registerfel på `listed_from` (ligger i `check_prices`, 5 sessioner).
 
+### 9.3 Massive-referenslistor som snapshotkälla (U2B-FREE-1, 2026-11-15)
+Efter kravet **0 kr i datakostnader** (D-026) ersätts U2-planen i §10 av en gratisväg (`U2A_FREE_DATAKALLOR.md`). Första steget är en ny källa i U0:s append-only-arkiv, **inte** en `UniverseModel`-laddare:
+- `data/snapshots.py::snapshot_massive_tickers(store, effective_date=…)` hämtar `GET /v3/reference/tickers?market=stocks&date=<effective_date>&active=true|false&limit=1000` (Massive Basic, 0 USD) och följer `next_url` tills sista sidan; varje sida sparas rå som `active_pNNNN.json`/`inactive_pNNNN.json` under `data/snapshots/massive_tickers/<UTC>/` med manifest (sha256 per sida, radantal, HTTP-datum, rate-limit-headrar, status) och `extra`: `label = "effective_dated_reconstructed"`, `effective_date`, `fetched_at`, `active_count`/`inactive_count`, sidor och fel per lista, `last_updated_utc_min/max` ur raderna, `slept_s`, `redacted_files`.
+- **Tre tider, aldrig förväxlade (D-023):** `effective_date` = datumet listan avser; `fetched_at` = när vi hämtade; `last_updated_utc` = när Massive senast uppdaterade raden. Massives dokumentation säger att en lista för ett tidigare datum är "the record as Massive maintains it now" – därför etiketten *effective_dated_reconstructed*, aldrig "point-in-time". `active=false` betyder *inaktiv på effective_date*, inte "avnoterad senare".
+- **Status:** `complete` bara när båda listorna nått en sida utan `next_url` och alla sidor parsats (`status: "OK"`, `results`-lista). Nätverksfel/403/timeout, ofullständig JSON, `status: "ERROR"` eller sidtaket (`MASSIVE_MAX_PAGES`) ger `incomplete` (sparade sidor behålls) eller `failed`.
+- **Takt och nyckel:** högst ett anrop per `min_interval` (12 s = Basic-planens 5/min), via injicerbar `sleep`/`clock`; 429 hanteras av `default_http_get` med `Retry-After`. Nyckeln läses från `MASSIVE_API_KEY` (`.env`) och skickas enbart som `Authorization: Bearer`; alla URL:er rensas från `apiKey` innan de lagras eller anropas; skulle en svarskropp eka nyckeln (t.ex. i `next_url`) ersätts den med `REDACTED` och sidan listas i `extra.redacted_files` – den enda redigering av råbytes som förekommer.
+- **Råfält bevaras** (ticker, name, cik, composite_figi, share_class_figi, type, primary_exchange, delisted_utc, last_updated_utc …); ingen tolkning, ingen mappning till `UniverseModel` (U2B-FREE-2). FIGI/CIK kan saknas eller delas; samma ticker kan finnas i både aktiva och inaktiva listan (återanvänd ticker) – det är precis vad D-025 senare ska skilja på.
+- CLI: `scripts/snapshot_listings.py --sources massive --date YYYY-MM-DD [--massive-min-interval 12]`; körs manuellt per datum, inte av timern. Räckvidd på Basic: ~2 år bakåt; äldre datum ger tomma/ofullständiga listor och ska mätas, inte antas.
+- Villkor: självbetjäningsplanerna är för individuellt bruk; om lokal lagring av referensdata för eget bruk uttryckligen tillåts är **inte verifierat** `[U]` – projektägaren läser Massives villkor före första riktiga körning (DATA_PILOT §7.2). Inga verkliga anrop har gjorts i U2B-FREE-1.
+
 ## 10. Stegvis plan
 
 | Steg | Innehåll | Kostnad | Resultat |
@@ -192,11 +202,15 @@ Implementerat enligt §9.1. 16 nya tester i `tests/test_portfolio_universe.py` (
 ### 11.3 D-025 (2026-11-15) – serieidentitet före featureberäkning
 Beslutat och implementerat enligt §9.2: `identify_series`/`owners_of`/`SeriesIdentity` i `data/universe_model.py`, `Universe.identify_series` i `backtesting/universe.py` (pilot = kompatibilitetsväg), `build_features` identifierar före beräkning, `run_portfolio` använder samma kontrakt, `--universe` i `scripts/build_features.py`. 9 tester i `tests/test_identity.py` (358 totalt): återanvänd ticker över två ägare (modell, `build_features`, motor), tickerbyte med oägt prefix, överlappande intervall → tvetydighet, oupplöst/okänt id, pilotväg oförändrad. Öppet som i §9.2 sista punkten.
 
-### 11.4 Läge efter U0
+### 11.4 U2B-FREE-1 (2026-11-15) – Massive-snapshots
+Implementerat enligt §9.3; 15 offlinetester i `tests/test_snapshots_massive.py` (373 totalt): komplett hämtning över flera sidor, aktiva + inaktiva, saknade FIGI/CIK, återanvänd ticker, takt (`min_interval`), 429 med `Retry-After`, 403/timeout/avbruten paginering/`status: ERROR`/sidtak → aldrig `complete`, nyckel aldrig på disk eller i utskrift (inkl. ekad `next_url`), saknad nyckel → `failed` före nätverk, append-only, U0-källorna oförändrade, `data/**` git-ignorerat, CLI. Öppet: Massives villkor för lokal lagring; verklig Basic-åtkomst (räckvidd, faktiska rate-limit-headrar) kontrolleras separat.
+
+### 11.5 Läge efter U0
 
 U0 implementerat: `data/snapshots.py` + `scripts/snapshot_listings.py` (D-019). Öppna beslut inför U1, formulerade som förslag i `DECISIONS.md`: **D-020** avnoteringsvärdering i fem kategorier där okänt utfall aldrig tyst påverkar huvudresultatet (`unresolved_delisting`), **D-021** T−1-medlemskap för nya köp skilt från corporate actions i befintliga positioner, **D-022** `instrument_id`/tickerintervall/`match_confidence`, **D-023** effektiv tid kontra kunskapstid (`observed_at`). §3:s tabell ska läsas med D-020: "värde 0" gäller bara kategori 4 (verifierat värdelös); allt osäkert går till den olösta gruppen. Kvarstående val före U1-kod: L2-definition (stapel + volym > 0; minsta antal staplar?), om L3 stannar i scannern, spin-off-hantering i `adj_factor`.
 
 ## Versionshistorik
+- 0.5 (2026-11-15): U2B-FREE-1 – §9.3 Massive-snapshots som effective_dated_reconstructed, §11.4; §10 U2-raden ersatt av gratisvägen (D-026).
 - 0.4 (2026-11-15): D-025 – §9.2 serieidentitet före featureberäkning, §9.1 sista-datum-regeln struken, §11.3.
 - 0.3 (2026-11-01): U1 steg B – §9.1 (vad som gäller i motorn), §11.2.
 - 0.2 (2026-11-01): U1 steg A – §11.1, D-024 fastställer D-020–D-023; datamodell och `Universe` implementerade utan motorintegration.
