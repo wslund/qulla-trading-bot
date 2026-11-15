@@ -289,6 +289,13 @@ def build_report(result: PortfolioResult) -> dict[str, Any]:
     return {"summary": report, "equity_curve": equity_curve}
 
 
+def _count(items) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for x in items:
+        out[str(x)] = out.get(str(x), 0) + 1
+    return dict(sorted(out.items()))
+
+
 def _universe_section(ua: dict) -> dict[str, Any]:
     if not ua:
         return {"universe_version": None, "note": "körning utan universe_audit (före U1B)"}
@@ -309,6 +316,8 @@ def _universe_section(ua: dict) -> dict[str, Any]:
         "excluded_uncertain": list(m.get("excluded_uncertain", [])),
         "l2_checked": m.get("l2_checked"),
         "not_in_universe": ua.get("not_in_universe", 0),
+        "identity_methods": _count(v.get("method") for v in (ua.get("identity") or {}).values()),
+        "identity": ua.get("identity"),
         "quality": ua.get("quality"),
         "position_events": [{**e, "date": str(e["date"])} for e in ua.get("position_events", [])],
         "valid_for_evaluation": ua.get("valid_for_evaluation", True),
