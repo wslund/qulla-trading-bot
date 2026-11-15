@@ -46,6 +46,7 @@ from tradingbot.data.universe_model import (
     Listing,
     TickerSpan,
     UniverseModel,
+    UnresolvedSeriesError,
 )
 from tradingbot.signals.state import Status
 
@@ -250,7 +251,7 @@ def test_ambiguous_or_unresolvable_series_key_raises() -> None:
     # Nobody owns the ticker on the last bar → explicit error, not an empty universe.
     m3 = model_for(series)
     m3.ticker_spans = [TickerSpan("I-AAA", "ZZZ", first, None, "test", EARLY)]
-    with pytest.raises(UniverseError, match="no instrument owns"):
+    with pytest.raises(UnresolvedSeriesError, match="no instrument owns"):  # D-025
         run_portfolio(series, cands, params(), universe=PointInTimeUniverse(m3))
     # … unless the caller maps it explicitly.
     res = run_portfolio(

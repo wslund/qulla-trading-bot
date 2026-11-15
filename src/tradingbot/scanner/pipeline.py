@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from tradingbot.data.store import ParquetStore
+from tradingbot.data.universe_model import UniverseModel, pilot_identity
 from tradingbot.scanner.features import (
     FEATURE_VERSION,
     SPEC_VERSION,
@@ -31,15 +32,31 @@ def build_features(
     params: FeatureParams | None = None,
     splits_from: str | None = None,
     built_at: datetime | None = None,
+    universe_model: UniverseModel | None = None,
+    instrument_id: str | None = None,
 ) -> dict:
     """Compute features for a stored series and write Parquet + .meta.json. Returns the meta.
 
     ``splits_from`` names another stored source whose split_ratio is attached first (for
     as_traded series without split data, e.g. Alpaca raw with Yahoo's split list).
+
+    D-025: before any feature is computed the series is tied to exactly one instrument.
+    With ``universe_model`` every bar date is resolved through the ticker spans (or checked
+    against ``instrument_id`` when given); a series carrying another issuer's bars (reused
+    ticker), an unresolvable symbol or overlapping spans raise ``SeriesIdentityError`` and
+    nothing is written. Without a model the pilot compatibility path records
+    ``identity.method = "pilot"`` (symbol = id, unverified). The identity goes into the meta.
     """
     p = params or FeatureParams()
     df = store.read_processed(source, ticker)
     input_meta = store.read_meta(source, ticker)
+    dates = [pd.Timestamp(d).date() for d in df["date"]]
+    if universe_model is not None:
+        identity = universe_model.identify_series(
+            ticker.upper(), dates, instrument_id=instrument_id
+        )
+    else:
+        identity = pilot_identity(ticker.upper(), dates, instrument_id)
     notes = []
     if splits_from:
         splits_df = store.read_processed(splits_from, ticker)
@@ -56,6 +73,7 @@ def build_features(
         "input_quality_status": input_meta.get("quality_status"),
         "input_fetched_at": input_meta.get("fetched_at"),
         "splits_from": splits_from,
+        "identity": identity.to_dict(),
         "feature_rows": int(len(feats)),
         "first_complete_date": str(complete["date"].iloc[0]) if len(complete) else None,
         "last_date": str(feats["date"].iloc[-1]) if len(feats) else None,
@@ -136,6 +154,7 @@ def build_candidates(
         "input_quality_status": fmeta.get("input_quality_status"),
         "input_coverage": fmeta.get("input_coverage"),
         "splits_from": fmeta.get("splits_from"),
+        "identity": fmeta.get("identity"),
         "feature_version": fmeta.get("feature_version"),
         "feature_built_at": fmeta.get("built_at"),
         "spec_version": SPEC_VERSION,

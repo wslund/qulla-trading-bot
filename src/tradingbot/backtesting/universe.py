@@ -27,10 +27,13 @@ from typing import Protocol
 
 from tradingbot.data.universe_model import (
     UNCERTAIN,
+    AmbiguousOwnerError,
     CorporateAction,
     Delisting,
     Issue,
+    SeriesIdentity,
     UniverseModel,
+    pilot_identity,
 )
 
 EVALUATION, RESEARCH, PILOT = "evaluation", "research", "pilot"
@@ -94,6 +97,10 @@ class Universe(Protocol):
 
     def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]: ...
 
+    def identify_series(
+        self, symbol: str, dates: Iterable[date], *, instrument_id: str | None = None
+    ) -> SeriesIdentity: ...
+
 
 class PilotUniverse:
     """Fixed ticker list = the pilot's survivors. Not point-in-time (D-012)."""
@@ -128,6 +135,12 @@ class PilotUniverse:
 
     def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]:
         return []  # no listing history to check against
+
+    def identify_series(
+        self, symbol: str, dates: Iterable[date], *, instrument_id: str | None = None
+    ) -> SeriesIdentity:
+        """D-025 compatibility path: the symbol is the id, unverified."""
+        return pilot_identity(symbol, dates, instrument_id)
 
 
 HasBar = Callable[[str, date], bool | None]  # (instrument_id, day) -> bar with volume? None=unknown
@@ -255,6 +268,16 @@ class PointInTimeUniverse:
 
     def quality(self, bar_dates: dict[str, Iterable[date]]) -> list[Issue]:
         return self.model.check_prices(bar_dates, only_given=True)
+
+    def identify_series(
+        self, symbol: str, dates: Iterable[date], *, instrument_id: str | None = None
+    ) -> SeriesIdentity:
+        """D-025: every bar date must resolve to the same single owner (or match the given
+        id); mixed, unresolved or ambiguous series raise."""
+        try:
+            return self.model.identify_series(symbol, dates, instrument_id=instrument_id)
+        except AmbiguousOwnerError as e:
+            raise AmbiguousTicker(str(e)) from e
 
     def delisting_for(self, instrument_id: str) -> Delisting | None:
         hits = [d for d in self.model.delistings if d.instrument_id == instrument_id]

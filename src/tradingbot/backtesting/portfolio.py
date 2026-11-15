@@ -31,8 +31,9 @@ the last marked session (T−1), so membership – and the L2 "has a bar" check 
 never reads anything from day T. A candidate whose instrument is not a member is rejected
 ``not_in_universe`` (stage ``universe``) and its setup key stays ARMED. Series are keyed by
 the data layer's symbol; each symbol is resolved once to a stable ``instrument_id`` (the
-instrument that owned the ticker on the series' last bar date, or ``instrument_ids`` given
-explicitly); an ambiguous or unresolvable symbol raises instead of being guessed.
+owner of the symbol on *every* bar date, which must be one and the same instrument, or
+``instrument_ids`` given explicitly and verified; D-025); a mixed, ambiguous or unresolvable
+symbol raises instead of being guessed.
 Events that touch *open* positions (``events_for_positions``) are only observed here: a
 delisting reached by an open position is logged and marks the run
 ``valid_for_evaluation = False`` (``unresolved_delisting`` when the D-020 category is
@@ -242,11 +243,12 @@ def run_portfolio(
     tickers = sorted(series)
     data = {t: _TickerData(series[t], cands.get(t)) for t in tickers}
     uni: Universe = universe if universe is not None else PilotUniverse(tickers)
-    iid_of = _resolve_instruments(uni, data, instrument_ids)
+    iid_of, identities = _resolve_instruments(uni, data, instrument_ids)
     quality = uni.quality({iid_of[t]: data[t].dates for t in tickers})
     audit_u: dict[str, Any] = {
         **uni.describe(),
         "instrument_map": dict(sorted(iid_of.items())),
+        "identity": dict(sorted(identities.items())),  # D-025: how each series got its id
         "membership": {
             "sessions_checked": 0,
             "facts_total": 0,
@@ -737,28 +739,24 @@ def _close(
 
 def _resolve_instruments(
     uni: Universe, data: dict[str, _TickerData], given: dict[str, str] | None
-) -> dict[str, str]:
-    """Series key (data-layer symbol) -> stable instrument_id. The symbol is resolved on the
-    series' last bar date; ambiguity raises (AmbiguousTicker), an unresolvable symbol raises,
-    two series on one instrument raise. Nothing is guessed (D-022)."""
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """Series key (data-layer symbol) -> stable instrument_id via ``Universe.identify_series``
+    (D-025): every bar date must resolve to one and the same owner, or match the id given in
+    ``instrument_ids``. Mixed series (reused ticker), unresolved symbols and ambiguous spans
+    raise before anything is simulated; two series on one instrument raise. Nothing is
+    guessed (D-022). Returns the map and the per-series identity records."""
     out: dict[str, str] = {}
+    ids: dict[str, dict] = {}
     for t, d in data.items():
-        if given and t in given:
-            iid = given[t]
-        else:
-            iid = uni.instrument_for(t, d.dates[-1])
-        if iid is None:
-            raise UniverseError(
-                f"{t}: no instrument owns this ticker on {d.dates[-1]} in universe "
-                f"{uni.version}; pass instrument_ids explicitly"
-            )
-        out[t] = iid
+        ident = uni.identify_series(t, d.dates, instrument_id=(given or {}).get(t))
+        out[t] = ident.instrument_id
+        ids[t] = ident.to_dict()
     seen: dict[str, str] = {}
     for t, iid in out.items():
         if iid in seen:
             raise UniverseError(f"{seen[iid]} and {t} both map to instrument {iid}")
         seen[iid] = t
-    return out
+    return out, ids
 
 
 def _membership(uni: Universe, asof: date, stats: dict[str, Any]) -> set[str]:

@@ -66,6 +66,73 @@ class UniverseModelError(ValueError):
     pass
 
 
+class SeriesIdentityError(UniverseModelError):
+    """A ticker-keyed price series could not be tied to exactly one instrument (D-025)."""
+
+
+class MixedSeriesError(SeriesIdentityError):
+    """Bars of the series belong to more than one instrument (reused ticker)."""
+
+
+class UnresolvedSeriesError(SeriesIdentityError):
+    """No instrument owns the symbol on any bar date (or the given instrument_id is unknown)."""
+
+
+class AmbiguousOwnerError(SeriesIdentityError):
+    """Two instruments claim the symbol on the same date (overlapping ticker spans)."""
+
+
+IDENTITY_PILOT, IDENTITY_RESOLVED, IDENTITY_GIVEN = "pilot", "date_resolved", "instrument_id"
+
+
+@dataclass(frozen=True)
+class SeriesIdentity:
+    """Who a ticker-keyed series belongs to, and how that was established (D-025).
+
+    ``method``: ``instrument_id`` (caller keyed the series by a stable id, verified against
+    the model), ``date_resolved`` (every bar date resolved through the ticker spans to the
+    same single owner), ``pilot`` (no universe model: symbol used as id, unverified).
+    ``owners_seen`` lists every instrument that owned the symbol on some bar date;
+    ``unowned_dates`` counts bar dates on which nobody owned it (pre-listing or
+    post-delisting bars – left to ``check_prices``, they are not another company's bars)."""
+
+    symbol: str
+    instrument_id: str
+    method: str
+    universe_version: str | None
+    first_date: date | None
+    last_date: date | None
+    owners_seen: tuple[str, ...]
+    unowned_dates: int
+    note: str = ""
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["first_date"] = str(self.first_date) if self.first_date else None
+        d["last_date"] = str(self.last_date) if self.last_date else None
+        d["owners_seen"] = list(self.owners_seen)
+        return d
+
+
+def pilot_identity(
+    symbol: str, dates: Iterable[date], instrument_id: str | None = None
+) -> SeriesIdentity:
+    """Compatibility path (D-025 §b): no universe model, so the symbol itself is the id. The
+    pilot's 19 series are hand-checked to be single-issuer; nothing here verifies that."""
+    ds = sorted(dates)
+    return SeriesIdentity(
+        symbol,
+        instrument_id or symbol,
+        IDENTITY_PILOT,
+        None,
+        ds[0] if ds else None,
+        ds[-1] if ds else None,
+        (),
+        0,
+        "unverified: no universe model (pilot compatibility path)",
+    )
+
+
 @dataclass(frozen=True)
 class Instrument:
     instrument_id: str
@@ -311,6 +378,70 @@ class UniverseModel:
                     )
                 )
         return out
+
+    # --- series identity (D-025) --------------------------------------------------------------
+
+    def owners_of(self, symbol: str, dates: Iterable[date]) -> dict[date, str | None]:
+        """instrument_id that owned ``symbol`` on each date (None = nobody). Two owners on one
+        date → AmbiguousOwnerError, never a choice."""
+        spans = [s for s in self.ticker_spans if s.ticker == symbol]
+        out: dict[date, str | None] = {}
+        for d in dates:
+            hits = {s.instrument_id for s in spans if s.covers(d)}
+            if len(hits) > 1:
+                raise AmbiguousOwnerError(f"{symbol}: {sorted(hits)} both own the ticker on {d}")
+            out[d] = next(iter(hits)) if hits else None
+        return out
+
+    def identify_series(
+        self, symbol: str, dates: Iterable[date], *, instrument_id: str | None = None
+    ) -> SeriesIdentity:
+        """Tie a ticker-keyed series to exactly one instrument, or refuse (D-025).
+
+        Without ``instrument_id`` every bar date is resolved through the ticker spans; the
+        series is accepted only if all owned dates point to the same instrument
+        (``date_resolved``). With ``instrument_id`` the series is accepted only if no bar
+        date is owned by another instrument (``instrument_id``). Bars nobody owns are
+        allowed and counted – they are the same issuer's pre-listing/post-delisting bars as
+        far as the register knows, and ``check_prices`` judges them."""
+        ds = sorted(set(dates))
+        if not ds:
+            raise UnresolvedSeriesError(f"{symbol}: empty series")
+        owners = self.owners_of(symbol, ds)
+        counts: dict[str, int] = {}
+        for o in owners.values():
+            if o is not None:
+                counts[o] = counts.get(o, 0) + 1
+        unowned = sum(1 for o in owners.values() if o is None)
+        seen = tuple(sorted(counts))
+        known = {i.instrument_id for i in self.instruments}
+        if instrument_id is not None:
+            if instrument_id not in known:
+                raise UnresolvedSeriesError(
+                    f"{symbol}: instrument_id {instrument_id!r} not in universe {self.version}"
+                )
+            others = {o: n for o, n in counts.items() if o != instrument_id}
+            if others:
+                raise MixedSeriesError(
+                    f"{symbol}: declared {instrument_id} but {sum(others.values())} bar(s) are "
+                    f"owned by {sorted(others)} – another issuer's history in the series"
+                )
+            method, iid = IDENTITY_GIVEN, instrument_id
+        else:
+            if len(seen) > 1:
+                raise MixedSeriesError(
+                    f"{symbol}: bars owned by {len(seen)} instruments "
+                    f"{dict(sorted(counts.items()))} – split the series per instrument or key "
+                    "it by instrument_id"
+                )
+            if not seen:
+                raise UnresolvedSeriesError(
+                    f"{symbol}: no instrument owns this ticker on any of the {len(ds)} bar dates "
+                    f"in universe {self.version}; pass instrument_id explicitly"
+                )
+            method, iid = IDENTITY_RESOLVED, seen[0]
+        note = f"{unowned} bar(s) without an owner (see check_prices)" if unowned else ""
+        return SeriesIdentity(symbol, iid, method, self.version, ds[0], ds[-1], seen, unowned, note)
 
     TABLES = (
         "instruments",
