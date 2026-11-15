@@ -153,7 +153,23 @@ Beslut att fatta före U1 (`[D]`): avnoteringsvärdering per orsak (§3), spin-o
 
 ## 11. Status och beslut efter U0 (2026-11-01)
 
+### 11.1 U1 steg A (2026-11-01) – datamodell och kvalitetstester
+D-020–D-023 fastställda genom **D-024** med begränsningar (olösta avnoteringar aldrig i equity-kurvan; U0 2026 ≠ PIT 2016; modellen värderar inte; `uncertain` ute ur utvärdering; L2 = stapel med volym).
+
+Implementerat (ingen leverantörsintegration, inga regel- eller riskändringar, ingen exekvering i portföljmotorn):
+- `data/universe_model.py`: frusna radtyper `Instrument`, `Listing` (slutet intervall `listed_from ≤ d ≤ listed_to`, `listed_to` = sista handelsdag), `TickerSpan` (halvöppet `[valid_from, valid_to)`), `Identifier` (`match_confidence`), `Delisting` (D-020-kategori + `replacement_value_per_share`), `CorporateAction`; alla med `source` och `observed_at` (kunskapstid, UTC). `UniverseModel.validate()` → FAIL vid överlappande noteringar, överlappande/tomma tickerintervall (även vid återanvänd ticker), okänt `instrument_id`, ogiltiga enum-värden, `verified_replacement` utan värde; WARN vid `listed_to` utan avnoteringshändelse och omvänt. `check_prices(bar_dates)` → FAIL vid staplar efter `listed_to` (tolerans 5 sessioner) eller inga staplar i en stängd notering; WARN vid sen första stapel mot registerdatum. Parquet + manifest under `data/universe/<version>/`, versioner oföränderliga.
+- `backtesting/universe.py`: `Universe`-protokoll med `members(asof, knowledge_at=None)` → `Membership(members, excluded_uncertain, knowledge_gap, facts_total, source)`, `instrument_for(ticker, asof)` / `ticker_on(instrument_id, asof)` (datumstyrda, `AmbiguousTicker` vid dubbelträff), och separat `events_for_positions(start, end)` (avnoteringar + corporate actions oavsett medlemskap, D-021). `PointInTimeUniverse(model, has_bar=None, mode=evaluation|research)` vägrar modeller med FAIL. `PilotUniverse(tickers)` för dagens 19 överlevare: alla medlemmar alla dagar, `knowledge_gap = None`, källa `pilot_list` – uttryckligen inte point-in-time.
+- `from_u0_snapshot` höjer `NotImplementedError` med motivering: U0 beskriver hämtningsdagen, inte det förflutna (D-024 p. 2).
+- `tests/test_universe.py` (22): intervallgränser (inklusive/halvöppet), överlapp, återanvänd ticker (gap, byte, tvetydighet), observationstid kontra effektiv tid (`knowledge_gap`, `knowledge_at`), avnotering kontra medlemskap, saknade/överskjutande priser, Parquet-rundtur, pilot-wrapper.
+
+Avvikelser mot §7-skissen: `ticker_history` heter `ticker_spans`; `delist_reason` ersatt av tabellen `delistings` (D-020-kategori per händelse); `fetched_at` heter `observed_at` genomgående (D-023); `universe_days` ej materialiserad ännu. Motorn tar fortfarande inte emot ett `Universe` – det är U1 steg B/U3.
+
+Öppet efter steg A: minsta antal staplar före T för L2; spin-off i `adj_factor`; var `universe_version` skrivs i `config.json`/`Trade.versions` (steg B); vilket historiskt register som fyller modellen (U2, Massive/Norgate – inget valt).
+
+### 11.2 Läge efter U0
+
 U0 implementerat: `data/snapshots.py` + `scripts/snapshot_listings.py` (D-019). Öppna beslut inför U1, formulerade som förslag i `DECISIONS.md`: **D-020** avnoteringsvärdering i fem kategorier där okänt utfall aldrig tyst påverkar huvudresultatet (`unresolved_delisting`), **D-021** T−1-medlemskap för nya köp skilt från corporate actions i befintliga positioner, **D-022** `instrument_id`/tickerintervall/`match_confidence`, **D-023** effektiv tid kontra kunskapstid (`observed_at`). §3:s tabell ska läsas med D-020: "värde 0" gäller bara kategori 4 (verifierat värdelös); allt osäkert går till den olösta gruppen. Kvarstående val före U1-kod: L2-definition (stapel + volym > 0; minsta antal staplar?), om L3 stannar i scannern, spin-off-hantering i `adj_factor`.
 
 ## Versionshistorik
+- 0.2 (2026-11-01): U1 steg A – §11.1, D-024 fastställer D-020–D-023; datamodell och `Universe` implementerade utan motorintegration.
 - 0.1 (2026-11-01): förstudie efter P1–P6/ORB och D-018. Leverantörsuppgifter lästa från Norgate (paketsida), EODHD (artikel om avnoterade), Massive (All Tickers-dokumentation och kunskapsbas), Alpaca (corporate actions-referens), QuantRocket (Sharadar-sidor); Massive-priser via tredjepartssida. Inget verifierat mot faktisk data ännu.
