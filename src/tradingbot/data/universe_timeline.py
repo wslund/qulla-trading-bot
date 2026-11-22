@@ -17,7 +17,9 @@ instrument next to each other and reports what they *jointly* say and what they 
   ``not_observed`` gap; only Massive's ``delisted_date`` (or an inactive observation) says
   anything about delisting. An active→inactive transition between D1 and D2 is
   ``consistent`` when D1 <= delisted_date <= D2, ``inconsistent`` otherwise, ``unknown``
-  without a date. Inactive-then-active is ``reactivated`` (never one continuous listing).
+  without a date or when the same id is both active and inactive on one date
+  (``mixed_state_same_date``). Inactive-then-active is ``reactivated`` (never one
+  continuous listing).
 - **Ticker changes** are bounds, not dates: ticker X on D1 and Y on D2 for the same
   instrument gives ``TickerChangeBound(lo_exclusive=D1, hi_inclusive=D2)``.
 - **Reused tickers**: the same symbol in two timelines is noted (``ticker_reused``), the
@@ -275,6 +277,10 @@ def _build_timeline(
 
 
 def _delisting(iid, obs, by_date, seen, flags) -> DelistingFact | None:
+    """Delisting facts from *observations*, never from absence. A date on which the same
+    instrument id carries both an active and an inactive row (shared FIGI cluster, vendor
+    duplicate) is a mixed state: it is flagged and makes the consistency judgement
+    ``unknown`` – it is neither resolved nor compared."""
     states = []
     for d in seen:
         st = {o.active for o in by_date[d]}
@@ -290,14 +296,23 @@ def _delisting(iid, obs, by_date, seen, flags) -> DelistingFact | None:
         flags.append("reactivated")
     if not inactive_obs:
         return None
-    last_active = max((d for d, a in states if a is True), default=None)
-    first_inactive = min((d for d, a in states if a is False), default=None)
+    mixed = [d for d, a in states if a is None]
+    if mixed:
+        flags.append("mixed_state_same_date")
+    # bounds from the observations themselves (a mixed date still *has* an inactive row)
+    active_dates = [o.effective_date for o in obs if o.active]
+    inactive_dates = [o.effective_date for o in inactive_obs]
+    last_active = max(active_dates) if active_dates else None
+    first_inactive = min(inactive_dates)
     dl = inactive_obs[-1]  # the latest inactive observation carries the vendor's current view
     if dl.delisted_date is None:
         return DelistingFact(
             iid, None, None, UNKNOWN, last_active, first_inactive, "no delisted_utc"
         )
-    if last_active is not None and last_active < first_inactive:
+    if mixed:
+        cons = UNKNOWN
+        note = f"active and inactive rows on the same date ({mixed[0]}); not compared"
+    elif last_active is not None and last_active < first_inactive:
         ok = last_active <= dl.delisted_date <= first_inactive
         cons = CONSISTENT if ok else INCONSISTENT
         note = "" if ok else f"delisted_date outside [{last_active}, {first_inactive}]"

@@ -393,3 +393,103 @@ def test_sorting_determinism_and_timestamp_preservation():
     pit.point_in_time = True
     with pytest.raises(TimelineError, match="point_in_time"):
         link_inventories([pit])
+
+
+# HOTFIX ------------------------------------------------------------------------------------------
+def test_hotfix_inactive_row_only_on_a_mixed_state_date_does_not_crash():
+    """Regression (real data, 2025-11-20 + 2026-11-20): a shared-FIGI cluster had an active
+    and an inactive row on the same effective_date, so the per-date state was ambiguous and
+    first_inactive became None while delisted_date existed → TypeError in _delisting."""
+    before = D1 - timedelta(days=40)
+    mixed = [
+        ob(D2, F2, "SSS", "FIGI-S", conf=UNCERTAIN, flags=("figi_shared",)),
+        ob(
+            D2,
+            F2,
+            "SST",
+            "FIGI-S",
+            conf=UNCERTAIN,
+            active=False,
+            delisted=before,
+            flags=("figi_shared",),
+        ),
+    ]
+    # case A: the mixed date is the only observation (no active-only date anywhere)
+    tls, rep = link_inventories([inv(D2, F2, mixed)])
+    t = by_id(tls)["FIGI-S"]
+    assert t.state_on(D2) == "ambiguous" and "mixed_state_same_date" in t.flags
+    d = t.delisting
+    assert (
+        d is not None and d.consistency == UNKNOWN and d.delisted_date == before
+    )  # kept, not judged
+    assert (d.last_active_observed, d.first_inactive_observed) == (D2, D2)
+    assert "not compared" in d.note and "delisting_inconsistent" not in t.flags
+    assert rep.delisting_unknown == 1 and t.link_confidence == UNCERTAIN
+    # case B: active-only on D1, mixed on D2 (the exact shape that crashed)
+    tls, rep = link_inventories([inv(D1, F1, [ob(D1, F1, "SSS", "FIGI-S")]), inv(D2, F2, mixed)])
+    t = by_id(tls)["FIGI-S"]
+    assert (
+        t.delisting.consistency == UNKNOWN and t.delisting.last_active_observed == D2
+    )  # the mixed date has an active row
+    assert t.delisting.first_inactive_observed == D2 and "reactivated" not in t.flags
+    assert rep.delisting_unknown == 1 and rep.delisting_inconsistent == 0
+    # case C: mixed on D1, inactive-only on D2 → still unknown (a mixed date is never compared)
+    later_inactive = ob(
+        D2,
+        F2,
+        "SST",
+        "FIGI-S",
+        conf=UNCERTAIN,
+        active=False,
+        delisted=before,
+        flags=("figi_shared",),
+    )
+    mixed_d1 = [
+        ob(D1, F1, "SSS", "FIGI-S", conf=UNCERTAIN, flags=("figi_shared",)),
+        ob(
+            D1,
+            F1,
+            "SST",
+            "FIGI-S",
+            conf=UNCERTAIN,
+            active=False,
+            delisted=before,
+            flags=("figi_shared",),
+        ),
+    ]
+    tls, _ = link_inventories([inv(D1, F1, mixed_d1), inv(D2, F2, [later_inactive])])
+    assert by_id(tls)["FIGI-S"].delisting.consistency == UNKNOWN
+    # case D: mixed date without any delisted_date → unknown with the no-date note, no crash
+    nodate = [
+        ob(D2, F2, "UUU", "FIGI-U", conf=UNCERTAIN, flags=("figi_shared",)),
+        ob(D2, F2, "UUV", "FIGI-U", conf=UNCERTAIN, active=False, flags=("figi_shared",)),
+    ]
+    tls, _ = link_inventories([inv(D2, F2, nodate)])
+    assert by_id(tls)["FIGI-U"].delisting.consistency == UNKNOWN
+    assert by_id(tls)["FIGI-U"].delisting.note == "no delisted_utc"
+
+
+def test_hotfix_unmixed_cases_keep_previous_judgements():
+    """The fix must not change clean cases: inactive-only, active→inactive, reactivation."""
+    before = D1 - timedelta(days=10)
+    tls, _ = link_inventories(
+        [inv(D1, F1, [ob(D1, F1, "VVV", "FIGI-V", active=False, delisted=before)])]
+    )
+    d = by_id(tls)["FIGI-V"].delisting
+    assert (
+        d.consistency == CONSISTENT
+        and d.last_active_observed is None
+        and d.first_inactive_observed == D1
+    )
+    tls, _ = link_inventories(
+        [inv(D1, F1, [ob(D1, F1, "VVV", "FIGI-V", active=False, delisted=D1 + timedelta(days=1))])]
+    )
+    assert (
+        by_id(tls)["FIGI-V"].delisting.consistency == INCONSISTENT
+    )  # date after the inactive observation
+    tls, _ = link_inventories([
+        inv(D1, F1, [ob(D1, F1, "WWW", "FIGI-W")]),
+        inv(D2, F2, [ob(D2, F2, "WWW", "FIGI-W", active=False, delisted=D1 + timedelta(days=7))]),
+    ])  # fmt: skip
+    assert by_id(tls)["FIGI-W"].delisting.consistency == CONSISTENT
+    assert "mixed_state_same_date" not in by_id(tls)["FIGI-W"].flags
