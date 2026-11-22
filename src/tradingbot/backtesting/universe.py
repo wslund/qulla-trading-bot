@@ -20,6 +20,7 @@ exists so the engine can get a ``Universe`` without pretending the pilot is poin
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -146,6 +147,17 @@ class PilotUniverse:
 HasBar = Callable[[str, date], bool | None]  # (instrument_id, day) -> bar with volume? None=unknown
 
 
+def reconstructed_label(model: UniverseModel) -> str | None:
+    """The reconstruction label a model build wrote into ``notes`` (JSON), or None."""
+    try:
+        obj = json.loads(model.notes or "")
+    except (TypeError, ValueError):
+        return None
+    if isinstance(obj, dict) and obj.get("point_in_time") is False and obj.get("label"):
+        return str(obj["label"])
+    return None
+
+
 class PointInTimeUniverse:
     """Membership from a ``UniverseModel``.
 
@@ -256,13 +268,16 @@ class PointInTimeUniverse:
         return spans[0].ticker if spans else None
 
     def describe(self) -> dict:
+        label = reconstructed_label(self.model)
         return {
             "universe_version": self.version,
             "source": f"universe_model:{self.version}",
             "mode": self.mode,
             "checksum": self.model.checksum(),
             "n_instruments": len(self.model.instruments),
-            "point_in_time": True,
+            # a model built from reconstructed vendor lists (U2B-FREE-3B) is never point-in-time
+            "point_in_time": label is None,
+            "label": label,
             "model_status": self.model.status(),
         }
 

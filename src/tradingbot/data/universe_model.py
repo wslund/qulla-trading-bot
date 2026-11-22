@@ -4,7 +4,7 @@ Tables (frozen rows, kept as lists; Parquet on disk under data/universe/<version
 
   instruments     instrument_id, name, security_type, country, source, observed_at
   listings        instrument_id, exchange, listed_from, listed_to (None = still listed),
-                  listed_from_source (register | first_bar), source, observed_at
+                  listed_from_source (register | first_bar | observed), source, observed_at
   ticker_spans    instrument_id, ticker, valid_from, valid_to (None = current), source,
                   observed_at
   identifiers     instrument_id, id_type (figi | cik | cusip | permaticker | …), id_value,
@@ -44,7 +44,10 @@ import pandas as pd
 
 UNIVERSE_MODEL_VERSION = "1"
 
-REGISTER, FIRST_BAR = "register", "first_bar"
+REGISTER, FIRST_BAR, OBSERVED = "register", "first_bar", "observed"
+# OBSERVED (U2B-FREE-3B-1): listed_from is the first date the instrument was *observed* listed
+# in a reconstructed vendor list – "listed no later than"; the real first trading day is unknown.
+LISTED_FROM_SOURCES = (REGISTER, FIRST_BAR, OBSERVED)
 EXACT, DERIVED, MANUAL, UNCERTAIN = "exact", "derived", "manual", "uncertain"
 CONFIDENCES = (EXACT, DERIVED, MANUAL, UNCERTAIN)
 VERIFIED_REPLACEMENT = "verified_replacement"
@@ -149,7 +152,7 @@ class Listing:
     exchange: str
     listed_from: date
     listed_to: date | None
-    listed_from_source: str  # REGISTER | FIRST_BAR
+    listed_from_source: str  # REGISTER | FIRST_BAR | OBSERVED
     source: str
     observed_at: datetime
 
@@ -241,7 +244,7 @@ class UniverseModel:
                 out.append(
                     Issue(FAIL, "listings", f"{ls.instrument_id}: listed_to before listed_from")
                 )
-            if ls.listed_from_source not in (REGISTER, FIRST_BAR):
+            if ls.listed_from_source not in LISTED_FROM_SOURCES:
                 out.append(Issue(FAIL, "listings", f"{ls.instrument_id}: bad listed_from_source"))
             by_inst.setdefault(ls.instrument_id, []).append(ls)
         for iid, rows in by_inst.items():
