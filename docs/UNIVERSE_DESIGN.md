@@ -179,6 +179,14 @@ Verklig data (U2B-FREE-2A, 2026-11-20): 36 938 poster, 11 995 sannolika vanliga 
 - **Avnoteringar**: `delisted_date` + `delisted_source = "massive:delisted_utc"`; inaktiv utan datum → `delisted_uncertainty = no_date`; datum efter `effective_date` → `after_effective_date` (artefakt); ingen orsak sätts (D-020-kategori förblir oavgjord).
 - `observed_members(inv)` = aktiva, icke-tvetydiga instrument med `exact`/`derived` identitet – surrogat ingår inte. `MassiveInventory.write/read` under `data/universe_obs/<version>/` (append-only, version `massive-<effective_date>-<fetched_at>`), `ImportReport` i manifestet. CLI `scripts/build_universe_inventory.py` skriver bara aggregerade antal.
 
+### 9.5 Tidslinjer ur flera snapshots (U2B-FREE-3A, 2026-11-22)
+`data/universe_timeline.py` lägger observationer från flera `MassiveInventory` (olika `effective_date`) bredvid varandra utan att hitta på något om dagarna emellan:
+- **Revisioner först:** `select_revisions` tar exakt en inventering per `effective_date` (`revision = latest | earliest`); övriga `observed_at` listas i `LinkReport.revisions_skipped`. Samma `effective_date` + samma `observed_at` = dubblett → fel. `revision_report(a, b)` mäter skillnaden mellan två hämtningar av samma datum (oförändrade, tillkomna, borttagna, ändrade per fält, identitetsbyten) – leverantörsrevisioner, inte marknadshändelser.
+- **Länkning bara via FIGI-id** (`FIGI-…` exact, `CFIGI-…` derived). Surrogat (`MSV-…`) länkas aldrig (`surrogate_unlinked`). Tidslinjens `link_confidence` är aldrig högre än den svagaste observationen och sänks till `uncertain` vid `figi_shared` (uppgraderas aldrig), vid CIK som finns på båda sidor men skiljer (`cik_conflict`) eller vid skiljande `composite_figi` (`composite_figi_conflict`). Saknad identifierare är ingen konflikt. CIK skapar aldrig en länk.
+- **`InstrumentTimeline`**: observationerna oförändrade och sorterade, `dates_observed`, `dates_not_observed` (snapshotdatum där id:t saknas – `not_observed`, aldrig `delisted`), `state_on(d)` ∈ {active, inactive, ambiguous, not_observed}, `TickerChangeBound(from, to, lo_exclusive=D1, hi_inclusive=D2)` för byten mellan två observationer med en ticker vardera (kluster ger `ticker_set_changed` i stället), `DelistingFact` (datum, källa `massive:delisted_utc`, `consistent` om sista aktiva ≤ datum ≤ första inaktiva observation, `inconsistent` annars eller vid `after_effective_date`, `unknown` utan datum), flaggor `reactivated`, `delisted_date_revised`, `attribute_changed`, `ticker_reused[_unverified]`. `observed_at` per observation = snapshotets `fetched_at`; `point_in_time = False`.
+- **Återanvända tickers** över tidslinjer slås aldrig ihop; verifierad återanvändning kräver att den tidigare ägaren syns inaktiv senast när den nya är aktiv, annars `ticker_reused_unverified`.
+- Avvikelser mot designrapporten (`U2B_FREE_3_DESIGN.md`): CIK-/composite_figi-konflikt sänker konfidensen (säkerhetskrav 3A), `DelistingFact` ersätter designens tuple, `state_on` tillkom; `timeline_to_model` och U0-jämförelse är fortfarande inte byggda (3B/3C).
+
 ## 10. Stegvis plan
 
 | Steg | Innehåll | Kostnad | Resultat |
@@ -219,11 +227,15 @@ Implementerat enligt §9.3; 15 offlinetester i `tests/test_snapshots_massive.py`
 ### 11.5 U2B-FREE-2B (2026-11-22) – inventering i stället för UniverseModel
 Implementerat enligt §9.4; 11 offlinetester i `tests/test_universe_massive.py` (384 totalt): verifierad laddning, manipulerad sida, ofullständigt/fel källa, sid- och radantal, strikt urval med alla orsaker, identitet (exact/derived/surrogat/delad FIGI), återanvänd och tvetydig ticker, `observed_at = fetched_at` och inga startdatum, avnoteringsdatum med källa/osäkerhet utan orsak, Parquet-rundtur, CLI. Begränsning: ingen `UniverseModel`, ingen motorkoppling. Nästa (U2B-FREE-3): andra källa för startdatum och §8-jämförelse mot U0 samma dag.
 
-### 11.6 Läge efter U0
+### 11.6 U2B-FREE-3A (2026-11-22) – länkade observationer
+Implementerat enligt §9.5; 11 offlinetester i `tests/test_universe_timeline.py` (395 totalt): unik FIGI två datum, FIGI med motstridig CIK/composite_figi, surrogat olänkade, delad FIGI förblir osäker, tickerbyte som gräns `(D1, D2]`, återanvänd ticker (verifierad/overifierad), aktiv→inaktiv konsistent inkl. gränsvärden, återaktivering/motstridiga datum/okänt/artefakt, saknad i senare snapshot = `not_observed`, två revisioner samma datum + `revision_report`, sortering/determinism/tidsstämplar. Kvar: 3B `timeline_to_model` med deklarerad policy (`listed_from_source="observed"`, `continuity="last_observation"`), 3C U0-jämförelse; riktig data kräver ett andra Massive-snapshot (ägarens beslut, 0 kr).
+
+### 11.7 Läge efter U0
 
 U0 implementerat: `data/snapshots.py` + `scripts/snapshot_listings.py` (D-019). Öppna beslut inför U1, formulerade som förslag i `DECISIONS.md`: **D-020** avnoteringsvärdering i fem kategorier där okänt utfall aldrig tyst påverkar huvudresultatet (`unresolved_delisting`), **D-021** T−1-medlemskap för nya köp skilt från corporate actions i befintliga positioner, **D-022** `instrument_id`/tickerintervall/`match_confidence`, **D-023** effektiv tid kontra kunskapstid (`observed_at`). §3:s tabell ska läsas med D-020: "värde 0" gäller bara kategori 4 (verifierat värdelös); allt osäkert går till den olösta gruppen. Kvarstående val före U1-kod: L2-definition (stapel + volym > 0; minsta antal staplar?), om L3 stannar i scannern, spin-off-hantering i `adj_factor`.
 
 ## Versionshistorik
+- 0.7 (2026-11-22): U2B-FREE-3A – §9.5 tidslinjer ur flera snapshots, §11.6.
 - 0.6 (2026-11-22): U2B-FREE-2B – §9.4 inventering av observationer (mellanformat), §11.5.
 - 0.5 (2026-11-15): U2B-FREE-1 – §9.3 Massive-snapshots som effective_dated_reconstructed, §11.4; §10 U2-raden ersatt av gratisvägen (D-026).
 - 0.4 (2026-11-15): D-025 – §9.2 serieidentitet före featureberäkning, §9.1 sista-datum-regeln struken, §11.3.
