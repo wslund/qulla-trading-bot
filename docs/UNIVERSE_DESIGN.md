@@ -168,6 +168,17 @@ Efter kravet **0 kr i datakostnader** (D-026) ersätts U2-planen i §10 av en gr
 - CLI: `scripts/snapshot_listings.py --sources massive --date YYYY-MM-DD [--massive-min-interval 12]`; körs manuellt per datum, inte av timern. Räckvidd på Basic: ~2 år bakåt; äldre datum ger tomma/ofullständiga listor och ska mätas, inte antas.
 - Villkor: självbetjäningsplanerna är för individuellt bruk; om lokal lagring av referensdata för eget bruk uttryckligen tillåts är **inte verifierat** `[U]` – projektägaren läser Massives villkor före första riktiga körning (DATA_PILOT §7.2). Inga verkliga anrop har gjorts i U2B-FREE-1.
 
+### 9.4 Inventering av Massive-observationer (U2B-FREE-2B, 2026-11-22) – ett mellanformat, inte en UniverseModel
+Verklig data (U2B-FREE-2A, 2026-11-20): 36 938 poster, 11 995 sannolika vanliga US-aktier efter strikt filter, 1 138 av dem avnoterade inom tvåårsfönstret, 40,7 % utan `share_class_figi`, ett enda effective-dated snapshot. Slutsats: en `UniverseModel` kan inte byggas ärligt ur ett snapshot – `Listing.listed_from` och `TickerSpan.valid_from` skulle behöva hittas på. Därför:
+- `data/universe_massive.py::load_snapshot(dir)` importerar bara `complete`-snapshots med etiketten `effective_dated_reconstructed`, räknar om sha256 per sida, kontrollerar sidantal (manifest = listor = filer) och radantal (per fil och per lista) **innan** en rad tolkas; annars `SnapshotImportError`.
+- **Urval** (`exclusion_reason`): `type == CS` ∧ `locale == us` ∧ `primary_exchange ∈ {XNAS, XNYS, XASE, ARCX, BATS}`. Allt annat räknas per orsak (`type_ADRC`, `type_ETF`, `type_missing`, `exchange_missing`, `exchange_OTCM`, `locale_gb` …) i `ImportReport.excluded_by_reason`.
+- **Identitet**: `share_class_figi` unik inom snapshotet → `FIGI-<id>` (`exact`); annars unik `composite_figi` → `CFIGI-<id>` (`derived`); annars surrogat `MSV-<ticker>-<active|inactive>-<effective_date>` (`uncertain`, bara inventering). FIGI som delas av flera urvalda rader → alla `uncertain` med flaggan `figi_shared` (tickerbyte eller leverantörsfel – avgörs inte här). CIK är aldrig id (flagga `no_cik` när den saknas).
+- **Tickers**: samma symbol i aktiva och inaktiva listan = förväntad återanvändning (`ticker_reused`), två instrument hålls isär; samma symbol två gånger i aktiva listan = `ambiguous_ticker`, kvar i inventeringen men aldrig medlem.
+- **Observation ≠ historik**: `InstrumentObservation` har inga startdatum alls – bara "på `effective_date` hörde ticker X till instrument I, aktiv/inaktiv". `to_universe_model` höjer `NotImplementedError`. Verifierade `TickerSpan`/`Listing` kräver en andra källa (U2B-FREE-3): ett andra `effective_date`, Alpacas första stapel (`listed_from_source = first_bar`) eller Massive `events`. Alternativ liten modelländring om det behövs senare: `Listing.listed_from: date | None` med `listed_from_source = "unknown"` – **inte** gjord.
+- **Tider**: `observed_at` = manifestets `fetched_at` för varje rad; `last_updated_utc` bärs bara som fält; `point_in_time = False`.
+- **Avnoteringar**: `delisted_date` + `delisted_source = "massive:delisted_utc"`; inaktiv utan datum → `delisted_uncertainty = no_date`; datum efter `effective_date` → `after_effective_date` (artefakt); ingen orsak sätts (D-020-kategori förblir oavgjord).
+- `observed_members(inv)` = aktiva, icke-tvetydiga instrument med `exact`/`derived` identitet – surrogat ingår inte. `MassiveInventory.write/read` under `data/universe_obs/<version>/` (append-only, version `massive-<effective_date>-<fetched_at>`), `ImportReport` i manifestet. CLI `scripts/build_universe_inventory.py` skriver bara aggregerade antal.
+
 ## 10. Stegvis plan
 
 | Steg | Innehåll | Kostnad | Resultat |
@@ -205,11 +216,15 @@ Beslutat och implementerat enligt §9.2: `identify_series`/`owners_of`/`SeriesId
 ### 11.4 U2B-FREE-1 (2026-11-15) – Massive-snapshots
 Implementerat enligt §9.3; 15 offlinetester i `tests/test_snapshots_massive.py` (373 totalt): komplett hämtning över flera sidor, aktiva + inaktiva, saknade FIGI/CIK, återanvänd ticker, takt (`min_interval`), 429 med `Retry-After`, 403/timeout/avbruten paginering/`status: ERROR`/sidtak → aldrig `complete`, nyckel aldrig på disk eller i utskrift (inkl. ekad `next_url`), saknad nyckel → `failed` före nätverk, append-only, U0-källorna oförändrade, `data/**` git-ignorerat, CLI. Öppet: Massives villkor för lokal lagring; verklig Basic-åtkomst (räckvidd, faktiska rate-limit-headrar) kontrolleras separat.
 
-### 11.5 Läge efter U0
+### 11.5 U2B-FREE-2B (2026-11-22) – inventering i stället för UniverseModel
+Implementerat enligt §9.4; 11 offlinetester i `tests/test_universe_massive.py` (384 totalt): verifierad laddning, manipulerad sida, ofullständigt/fel källa, sid- och radantal, strikt urval med alla orsaker, identitet (exact/derived/surrogat/delad FIGI), återanvänd och tvetydig ticker, `observed_at = fetched_at` och inga startdatum, avnoteringsdatum med källa/osäkerhet utan orsak, Parquet-rundtur, CLI. Begränsning: ingen `UniverseModel`, ingen motorkoppling. Nästa (U2B-FREE-3): andra källa för startdatum och §8-jämförelse mot U0 samma dag.
+
+### 11.6 Läge efter U0
 
 U0 implementerat: `data/snapshots.py` + `scripts/snapshot_listings.py` (D-019). Öppna beslut inför U1, formulerade som förslag i `DECISIONS.md`: **D-020** avnoteringsvärdering i fem kategorier där okänt utfall aldrig tyst påverkar huvudresultatet (`unresolved_delisting`), **D-021** T−1-medlemskap för nya köp skilt från corporate actions i befintliga positioner, **D-022** `instrument_id`/tickerintervall/`match_confidence`, **D-023** effektiv tid kontra kunskapstid (`observed_at`). §3:s tabell ska läsas med D-020: "värde 0" gäller bara kategori 4 (verifierat värdelös); allt osäkert går till den olösta gruppen. Kvarstående val före U1-kod: L2-definition (stapel + volym > 0; minsta antal staplar?), om L3 stannar i scannern, spin-off-hantering i `adj_factor`.
 
 ## Versionshistorik
+- 0.6 (2026-11-22): U2B-FREE-2B – §9.4 inventering av observationer (mellanformat), §11.5.
 - 0.5 (2026-11-15): U2B-FREE-1 – §9.3 Massive-snapshots som effective_dated_reconstructed, §11.4; §10 U2-raden ersatt av gratisvägen (D-026).
 - 0.4 (2026-11-15): D-025 – §9.2 serieidentitet före featureberäkning, §9.1 sista-datum-regeln struken, §11.3.
 - 0.3 (2026-11-01): U1 steg B – §9.1 (vad som gäller i motorn), §11.2.
